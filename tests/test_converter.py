@@ -250,6 +250,90 @@ class TestIsAssetDecorator:
         assert isinstance(decorator, ast.Name)
         assert _is_asset_decorator(decorator) is False
 
+    def test_direct_asset_name_decorator(self) -> None:
+        """Test that @asset (direct import) is recognized."""
+        # When using: from dagster import asset
+        code = "@asset\ndef f(): pass"
+        tree = ast.parse(code)
+        func_def = tree.body[0]
+        decorator = func_def.decorator_list[0]  # type: ignore[attr-defined]
+
+        assert isinstance(decorator, ast.Name)
+        assert decorator.id == "asset"
+        assert _is_asset_decorator(decorator) is True
+
+    def test_direct_asset_call_decorator(self) -> None:
+        """Test that @asset(...) (direct import with args) is recognized."""
+        # When using: from dagster import asset; @asset(group="foo")
+        code = "@asset(group='foo')\ndef f(): pass"
+        tree = ast.parse(code)
+        func_def = tree.body[0]
+        decorator = func_def.decorator_list[0]  # type: ignore[attr-defined]
+
+        assert isinstance(decorator, ast.Call)
+        assert isinstance(decorator.func, ast.Name)
+        assert decorator.func.id == "asset"
+        assert _is_asset_decorator(decorator) is True
+
+    def test_complex_call_decorator_returns_false(self) -> None:
+        """Test that complex call decorators (e.g., @foo.bar()()) return False."""
+        # This is an edge case: decorator is Call but func is also a Call
+        code = "@get_decorator()('arg')\ndef f(): pass"
+        tree = ast.parse(code)
+        func_def = tree.body[0]
+        decorator = func_def.decorator_list[0]  # type: ignore[attr-defined]
+
+        # decorator is ast.Call, decorator.func is also ast.Call (not Name or Attribute)
+        assert isinstance(decorator, ast.Call)
+        assert isinstance(decorator.func, ast.Call)
+        assert _is_asset_decorator(decorator) is False
+
+    def test_subscript_decorator_returns_false(self) -> None:
+        """Test that subscript decorators (e.g., @decorators[0]) return False."""
+        # This covers the case where decorator is neither Attribute, Name, nor Call
+        code = "@decorators[0]\ndef f(): pass"
+        tree = ast.parse(code)
+        func_def = tree.body[0]
+        decorator = func_def.decorator_list[0]  # type: ignore[attr-defined]
+
+        # decorator is ast.Subscript (not Attribute, Name, or Call)
+        assert isinstance(decorator, ast.Subscript)
+        assert _is_asset_decorator(decorator) is False
+
+
+class TestDirectAssetImport:
+    """Tests for assets using direct import: from dagster import asset."""
+
+    def test_dagster_to_marimo_direct_asset_import(self) -> None:
+        """Test conversion when asset is imported directly."""
+        source = '''
+from dagster import asset
+
+@asset
+def my_asset() -> dict:
+    return {"value": 42}
+'''
+        result = dagster_to_marimo(source)
+
+        ast.parse(result)
+        assert "# asset: my_asset" in result
+        assert "@app.cell" in result
+
+    def test_dagster_to_marimo_direct_asset_with_args(self) -> None:
+        """Test conversion when asset is imported directly and has decorator args."""
+        source = '''
+from dagster import asset
+
+@asset(group="my_group")
+def grouped_asset() -> dict:
+    return {"value": 1}
+'''
+        result = dagster_to_marimo(source)
+
+        ast.parse(result)
+        assert "# asset: grouped_asset" in result
+        assert "@app.cell" in result
+
 
 class TestRoundTrip:
     """Tests for round-trip conversion (functional equivalence).

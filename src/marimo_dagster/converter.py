@@ -43,13 +43,25 @@ def _transform_pep723_metadata(metadata: str | None) -> str | None:
 
 
 def _is_asset_decorator(decorator: ast.expr) -> bool:
-    """Check if a decorator is @dg.asset or @dg.asset(...)."""
+    """Check if a decorator is an asset decorator.
+
+    Handles both import styles:
+    - import dagster as dg; @dg.asset / @dg.asset(...)
+    - from dagster import asset; @asset / @asset(...)
+    """
+    # @dg.asset (Attribute)
     if isinstance(decorator, ast.Attribute):
         return decorator.attr == "asset"
+    # @asset (Name - direct import)
+    elif isinstance(decorator, ast.Name):
+        return decorator.id == "asset"
+    # @dg.asset(...) or @asset(...) (Call)
     elif isinstance(decorator, ast.Call):
         func = decorator.func
         if isinstance(func, ast.Attribute):
             return func.attr == "asset"
+        elif isinstance(func, ast.Name):
+            return func.id == "asset"
     return False
 
 
