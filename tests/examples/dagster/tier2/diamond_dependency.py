@@ -2,7 +2,7 @@
 
 Demonstrates complex dependency resolution where multiple paths
 converge on a single downstream asset. Data flows through function
-parameters and return values.
+parameters and return values. The IOManager handles all storage.
 
 Dependency Graph:
        source
@@ -62,3 +62,9 @@ def merged(left_branch: dict, right_branch: dict) -> dict:
         },
         "sources": ["left_branch", "right_branch"],
     }
+
+
+defs = dg.Definitions(
+    assets=[source, left_branch, right_branch, merged],
+    resources={"io_manager": dg.mem_io_manager},
+)

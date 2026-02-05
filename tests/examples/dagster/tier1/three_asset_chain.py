@@ -1,7 +1,8 @@
 """Three assets in a linear chain (A -> B -> C) using IOManager pattern.
 
 Demonstrates multi-hop dependency traversal where data flows through
-function parameters and return values.
+function parameters and return values. The IOManager handles all
+intermediate storage.
 """
 
 # /// script
@@ -34,3 +35,9 @@ def final_report(filtered_data: dict) -> dict:
         "summary": f"Found {len(filtered_data['items'])} items",
         "items": filtered_data["items"],
     }
+
+
+defs = dg.Definitions(
+    assets=[source_data, filtered_data, final_report],
+    resources={"io_manager": dg.mem_io_manager},
+)
