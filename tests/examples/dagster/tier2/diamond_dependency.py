@@ -1,0 +1,64 @@
+"""Diamond-shaped dependency graph using IOManager pattern.
+
+Demonstrates complex dependency resolution where multiple paths
+converge on a single downstream asset. Data flows through function
+parameters and return values.
+
+Dependency Graph:
+       source
+       /    \\
+      v      v
+   left    right
+      \\    /
+       v  v
+      merged
+"""
+
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "dagster>=1.9.0",
+# ]
+# ///
+
+import dagster as dg
+
+
+@dg.asset
+def source() -> dict:
+    """Root asset that feeds into two downstream assets."""
+    return {
+        "values": [10, 20, 30, 40, 50],
+        "metadata": {"created_by": "source"},
+    }
+
+
+@dg.asset
+def left_branch(source: dict) -> dict:
+    """Left branch - computes sum of values."""
+    return {
+        "operation": "sum",
+        "result": sum(source["values"]),
+    }
+
+
+@dg.asset
+def right_branch(source: dict) -> dict:
+    """Right branch - computes average of values."""
+    values = source["values"]
+    return {
+        "operation": "average",
+        "result": sum(values) / len(values) if values else 0,
+    }
+
+
+@dg.asset
+def merged(left_branch: dict, right_branch: dict) -> dict:
+    """Merged asset - combines results from both branches."""
+    return {
+        "combined": {
+            "sum": left_branch["result"],
+            "average": right_branch["result"],
+        },
+        "sources": ["left_branch", "right_branch"],
+    }
