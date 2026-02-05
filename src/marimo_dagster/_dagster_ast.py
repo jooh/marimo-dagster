@@ -16,6 +16,9 @@ def parse_dagster(source: str) -> NotebookIR:
 
     imports: list[ImportItem] = []
     cells: list[CellNode] = []
+    # Track local names that resolve to dagster's `asset` decorator
+    # (e.g., `from dagster import asset` or `from dagster import asset as my_asset`)
+    asset_names: set[str] = set()
 
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -23,13 +26,20 @@ def parse_dagster(source: str) -> NotebookIR:
                 if alias.name not in _DAGSTER_MODULES:
                     imports.append(ImportItem(module=alias.name, alias=alias.asname))
         elif isinstance(node, ast.ImportFrom):
-            if node.module and not any(
+            if node.module and any(
                 node.module == m or node.module.startswith(m + ".")
                 for m in _DAGSTER_MODULES
             ):
+                # Collect local names that are aliases for `asset`
+                for alias in node.names:
+                    if alias.name == "asset":
+                        asset_names.add(alias.asname or alias.name)
+            elif node.module:
                 names = [(a.name, a.asname) for a in node.names]
                 imports.append(ImportItem(module=node.module, names=names))
-        elif isinstance(node, ast.FunctionDef) and _is_dagster_asset(node):
+        elif isinstance(node, ast.FunctionDef) and _is_dagster_asset(
+            node, asset_names=asset_names
+        ):
             cells.append(_parse_asset_function(node))
 
     return NotebookIR(
@@ -109,18 +119,32 @@ def _generate_asset_function(cell: CellNode) -> str:
     return "\n".join(lines)
 
 
-def _is_dagster_asset(node: ast.FunctionDef) -> bool:
-    """Check if a function is decorated with @dg.asset or @dagster.asset."""
+def _is_dagster_asset(
+    node: ast.FunctionDef, *, asset_names: set[str] | None = None
+) -> bool:
+    """Check if a function is decorated with a dagster asset decorator.
+
+    Supports attribute forms (@dg.asset, @dagster.asset) and bare name forms
+    (@asset) when the name is in asset_names (tracked from `from dagster import asset`).
+    """
+    _asset_names = asset_names or set()
     for dec in node.decorator_list:
-        # @dg.asset
+        # @dg.asset / @dagster.asset
         if isinstance(dec, ast.Attribute) and dec.attr == "asset":
             if isinstance(dec.value, ast.Name) and dec.value.id in ("dg", "dagster"):
                 return True
-        # @dg.asset(...)
+        # @dg.asset(...) / @dagster.asset(...)
         if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
             if dec.func.attr == "asset" and isinstance(dec.func.value, ast.Name):
                 if dec.func.value.id in ("dg", "dagster"):
                     return True
+        # @asset (bare name from `from dagster import asset`)
+        if isinstance(dec, ast.Name) and dec.id in _asset_names:
+            return True
+        # @asset(...) (bare call from `from dagster import asset`)
+        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name):
+            if dec.func.id in _asset_names:
+                return True
     return False
 
 

@@ -63,18 +63,14 @@ def transform_dependencies(
 ) -> list[str]:
     """Swap framework dependency while preserving others."""
     result = []
-    found_framework = False
     for dep in deps:
         # Extract bare package name (before any version specifier)
         bare_name = re.split(r"[><=!~\[]", dep)[0].strip()
-        if bare_name == from_framework:
-            found_framework = True
-        else:
+        if bare_name != from_framework:
             result.append(dep)
 
     # Always ensure the target framework is present
     if not any(re.split(r"[><=!~\[]", d)[0].strip() == to_framework for d in result):
         result.insert(0, to_framework)
 
-    _ = found_framework  # used for clarity, not needed for logic
     return result

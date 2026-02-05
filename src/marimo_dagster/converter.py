@@ -2,6 +2,7 @@
 
 from marimo_dagster._dagster_ast import generate_dagster, parse_dagster
 from marimo_dagster._marimo_ast import generate_marimo, parse_marimo
+from marimo_dagster._metadata import transform_dependencies
 
 
 def marimo_to_dagster(source: str) -> str:
@@ -14,6 +15,11 @@ def marimo_to_dagster(source: str) -> str:
         The source code of a dagster asset module.
     """
     ir = parse_marimo(source)
+    ir.metadata.dependencies = transform_dependencies(
+        ir.metadata.dependencies,
+        from_framework="marimo",
+        to_framework="dagster",
+    )
     return generate_dagster(ir)
 
 
@@ -27,4 +33,9 @@ def dagster_to_marimo(source: str) -> str:
         The source code of a marimo notebook.
     """
     ir = parse_dagster(source)
+    ir.metadata.dependencies = transform_dependencies(
+        ir.metadata.dependencies,
+        from_framework="dagster",
+        to_framework="marimo",
+    )
     return generate_marimo(ir)

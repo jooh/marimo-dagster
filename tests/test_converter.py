@@ -92,6 +92,54 @@ class TestDagsterToMarimo:
         assert "app.run()" in result
 
 
+class TestMetadataTransformation:
+    """Tests that PEP 723 dependencies are rewritten during conversion."""
+
+    def test_dagster_to_marimo_rewrites_deps(self) -> None:
+        """dagster_to_marimo should replace dagster dep with marimo in PEP 723."""
+        source = (
+            '# /// script\n'
+            '# requires-python = ">=3.12"\n'
+            '# dependencies = [\n'
+            '#     "dagster>=1.9.0",\n'
+            '#     "polars>=1.0",\n'
+            '# ]\n'
+            '# ///\n'
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        result = dagster_to_marimo(source)
+        assert '"marimo"' in result
+        assert "dagster" not in result.split("# ///")[1].split("# ///")[0]
+
+    def test_marimo_to_dagster_rewrites_deps(self) -> None:
+        """marimo_to_dagster should replace marimo dep with dagster in PEP 723."""
+        source = (
+            '# /// script\n'
+            '# requires-python = ">=3.12"\n'
+            '# dependencies = [\n'
+            '#     "marimo",\n'
+            '#     "polars>=1.0",\n'
+            '# ]\n'
+            '# ///\n'
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    x = 1\n'
+            '    return (x,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        assert '"dagster"' in result
+        # marimo should not appear in PEP 723 metadata section
+        assert "marimo" not in result.split("# ///")[1].split("# ///")[0]
+
+
 class TestRoundTrip:
     """Tests for round-trip conversion (structural equivalence).
 

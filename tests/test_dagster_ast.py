@@ -522,6 +522,94 @@ class TestParseDagsterEdgeCases:
         ir = parse_dagster(source)
         assert len(ir.cells) == 1
 
+    def test_bare_asset_decorator(self) -> None:
+        """@asset from `from dagster import asset` should be recognized."""
+        source = (
+            'from dagster import asset\n'
+            '\n'
+            '@asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "my_data"
+
+    def test_bare_asset_call_decorator(self) -> None:
+        """@asset(...) from `from dagster import asset` should be recognized."""
+        source = (
+            'from dagster import asset\n'
+            '\n'
+            '@asset(group_name="test")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "my_data"
+
+    def test_bare_aliased_asset_decorator(self) -> None:
+        """@my_asset from `from dagster import asset as my_asset` should be recognized."""
+        source = (
+            'from dagster import asset as my_asset\n'
+            '\n'
+            '@my_asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "my_data"
+
+    def test_bare_non_asset_name_not_matched(self) -> None:
+        """@op from `from dagster import op` should NOT be matched as asset."""
+        source = (
+            'from dagster import asset, op\n'
+            '\n'
+            '@op\n'
+            'def my_op():\n'
+            '    return 1\n'
+            '\n'
+            '@asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "my_data"
+
+    def test_bare_call_non_asset_not_matched(self) -> None:
+        """@op(...) call form from dagster should NOT be matched as asset."""
+        source = (
+            'from dagster import asset, op\n'
+            '\n'
+            '@op()\n'
+            'def my_op():\n'
+            '    return 1\n'
+            '\n'
+            '@asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "my_data"
+
+    def test_relative_import_without_module_ignored(self) -> None:
+        """from . import x (no module name) should not crash."""
+        source = (
+            'import dagster as dg\n'
+            'from . import helpers\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        # Relative import with no module should be silently skipped
+        assert all(imp.module != "" for imp in ir.imports)
+
     def test_call_decorator_wrong_module(self) -> None:
         """@other.asset(...) call form should not match."""
         source = (
