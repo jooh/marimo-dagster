@@ -8,6 +8,13 @@ Source: https://github.com/dagster-io/project-dagster-university
 License: Apache-2.0
 """
 
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "dagster>=1.9.0",
+# ]
+# ///
+
 import dagster as dg
 
 
