@@ -1,0 +1,57 @@
+[project]
+name = "marimo-dagster"
+version = "0.0.0"
+description = "Take Marimo notebooks to production as Dagster assets"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "typer>=0.21.1",
+]
+
+[project.license]
+file = "LICENSE"
+
+[project.urls]
+Homepage = "https://github.com/jooh/marimo-dagster"
+Repository = "https://github.com/jooh/marimo-dagster"
+Issues = "https://github.com/jooh/marimo-dagster/issues"
+
+[project.scripts]
+marimo-dagster = "marimo_dagster.cli:app"
+
+[build-system]
+requires = [
+    "hatchling>=1.27.0",
+]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/marimo_dagster",
+]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "marimo_dagster",
+]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.9.10",
+    "tomli-w>=1.0.0",
+    "ty>=0.0.14",
+]
