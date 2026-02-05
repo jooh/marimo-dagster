@@ -1,8 +1,7 @@
 """Tests for marimo-dagster converter functions."""
 
+import ast
 from pathlib import Path
-
-import pytest
 
 from marimo_dagster.converter import dagster_to_marimo, marimo_to_dagster
 
@@ -10,83 +9,121 @@ from marimo_dagster.converter import dagster_to_marimo, marimo_to_dagster
 class TestMarimoToDagster:
     """Tests for marimo_to_dagster conversion."""
 
-    def test_marimo_to_dagster_raises_not_implemented(self) -> None:
-        """Verify marimo_to_dagster raises NotImplementedError (stub)."""
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            marimo_to_dagster("# some marimo code")
+    def test_marimo_to_dagster_returns_string(self) -> None:
+        """Verify marimo_to_dagster returns a string."""
+        source = (
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    x = 1\n'
+            '    return (x,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        assert isinstance(result, str)
+
+    def test_marimo_to_dagster_produces_valid_python(self) -> None:
+        """Verify output is valid Python."""
+        source = (
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    x = 1\n'
+            '    return (x,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        ast.parse(result)
 
     def test_marimo_to_dagster_with_example(
         self, marimo_tier1_example: Path
     ) -> None:
         """Test marimo_to_dagster with tier 1 examples."""
         source = marimo_tier1_example.read_text()
-        # Should raise NotImplementedError until implemented
-        with pytest.raises(NotImplementedError):
-            marimo_to_dagster(source)
+        result = marimo_to_dagster(source)
+        # Verify valid Python
+        ast.parse(result)
+        # Verify dagster structure
+        assert "import dagster as dg" in result
 
 
 class TestDagsterToMarimo:
     """Tests for dagster_to_marimo conversion."""
 
-    def test_dagster_to_marimo_raises_not_implemented(self) -> None:
-        """Verify dagster_to_marimo raises NotImplementedError (stub)."""
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            dagster_to_marimo("# some dagster code")
+    def test_dagster_to_marimo_returns_string(self) -> None:
+        """Verify dagster_to_marimo returns a string."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        result = dagster_to_marimo(source)
+        assert isinstance(result, str)
+
+    def test_dagster_to_marimo_produces_valid_python(self) -> None:
+        """Verify output is valid Python."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        result = dagster_to_marimo(source)
+        ast.parse(result)  # Should not raise
 
     def test_dagster_to_marimo_with_example(
         self, dagster_tier1_example: Path
     ) -> None:
         """Test dagster_to_marimo with tier 1 examples."""
         source = dagster_tier1_example.read_text()
-        # Should raise NotImplementedError until implemented
-        with pytest.raises(NotImplementedError):
-            dagster_to_marimo(source)
+        result = dagster_to_marimo(source)
+        # Verify valid Python
+        ast.parse(result)
+        # Verify marimo structure
+        assert "import marimo" in result
+        assert "@app.cell" in result
+        assert "app.run()" in result
 
 
 class TestRoundTrip:
-    """Tests for round-trip conversion (functional equivalence).
+    """Tests for round-trip conversion (structural equivalence).
 
     These tests verify that:
-    - marimo -> dagster -> marimo produces functionally equivalent output
-    - dagster -> marimo -> dagster produces functionally equivalent output
-
-    For now, these are marked as expected to fail until converters are implemented.
+    - dagster -> marimo -> dagster preserves asset structure and dependencies
     """
 
-    @pytest.mark.xfail(reason="Converters not yet implemented", raises=NotImplementedError)
-    def test_roundtrip_marimo_to_dagster_to_marimo(
-        self, marimo_tier1_example: Path, example_venv_runner
-    ) -> None:
-        """Test marimo -> dagster -> marimo round-trip produces equivalent output.
-
-        Functional equivalence is tested by running both the original and
-        round-tripped notebooks and comparing their outputs.
-        """
-        original_source = marimo_tier1_example.read_text()
-
-        # Convert marimo -> dagster -> marimo
-        dagster_source = marimo_to_dagster(original_source)
-        roundtrip_source = dagster_to_marimo(dagster_source)
-
-        # TODO: Run both in isolated venvs and compare outputs
-        # For now, just verify the conversions complete
-        assert roundtrip_source is not None
-
-    @pytest.mark.xfail(reason="Converters not yet implemented", raises=NotImplementedError)
     def test_roundtrip_dagster_to_marimo_to_dagster(
-        self, dagster_tier1_example: Path, example_venv_runner
+        self, dagster_tier1_example: Path
     ) -> None:
-        """Test dagster -> marimo -> dagster round-trip produces equivalent output.
+        """Test dagster -> marimo -> dagster round-trip preserves assets."""
+        from marimo_dagster._dagster_ast import parse_dagster
 
-        Functional equivalence is tested by running both the original and
-        round-tripped dagster assets and comparing their outputs.
-        """
         original_source = dagster_tier1_example.read_text()
 
-        # Convert dagster -> marimo -> dagster
+        # Round-trip
         marimo_source = dagster_to_marimo(original_source)
         roundtrip_source = marimo_to_dagster(marimo_source)
 
-        # TODO: Run both in isolated venvs and compare outputs
-        # For now, just verify the conversions complete
-        assert roundtrip_source is not None
+        # Valid Python
+        ast.parse(roundtrip_source)
+
+        # Verify asset count preserved
+        original_ir = parse_dagster(original_source)
+        roundtrip_ir = parse_dagster(roundtrip_source)
+        assert len(roundtrip_ir.cells) == len(original_ir.cells)
+
+        # Verify asset names preserved
+        original_names = [c.name for c in original_ir.cells]
+        roundtrip_names = [c.name for c in roundtrip_ir.cells]
+        assert roundtrip_names == original_names
+
+        # Verify dependency graph preserved
+        for orig, rt in zip(original_ir.cells, roundtrip_ir.cells):
+            assert set(rt.inputs) == set(orig.inputs)

@@ -59,9 +59,9 @@ class TestCLIToDagster:
         result = runner.invoke(
             app, ["to-dagster", str(marimo_tier1_example), str(output_file)]
         )
-        # Should fail because converter raises NotImplementedError
-        assert result.exit_code != 0
-        assert "NotImplementedError" in result.stdout or "not yet implemented" in str(result.exception)
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "import dagster as dg" in output_file.read_text()
 
     def test_to_dagster_file_io(self, tmp_path: Path) -> None:
         """Test to-dagster file I/O with mocked converter."""
@@ -102,9 +102,9 @@ class TestCLIToMarimo:
         result = runner.invoke(
             app, ["to-marimo", str(dagster_tier1_example), str(output_file)]
         )
-        # Should fail because converter raises NotImplementedError
-        assert result.exit_code != 0
-        assert "NotImplementedError" in result.stdout or "not yet implemented" in str(result.exception)
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "import marimo" in output_file.read_text()
 
     def test_to_marimo_file_io(self, tmp_path: Path) -> None:
         """Test to-marimo file I/O with mocked converter."""
