@@ -102,9 +102,13 @@ class TestCLIToMarimo:
         result = runner.invoke(
             app, ["to-marimo", str(dagster_tier1_example), str(output_file)]
         )
-        # Should fail because converter raises NotImplementedError
-        assert result.exit_code != 0
-        assert "NotImplementedError" in result.stdout or "not yet implemented" in str(result.exception)
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "Converted" in result.stdout
+        # Verify output has marimo structure
+        output_content = output_file.read_text()
+        assert "import marimo" in output_content
+        assert "@app.cell" in output_content
 
     def test_to_marimo_file_io(self, tmp_path: Path) -> None:
         """Test to-marimo file I/O with mocked converter."""

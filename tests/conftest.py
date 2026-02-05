@@ -10,18 +10,22 @@ import pytest
 EXAMPLES_DIR = Path(__file__).parent / "examples"
 MARIMO_TIER1_DIR = EXAMPLES_DIR / "marimo" / "tier1"
 DAGSTER_TIER1_DIR = EXAMPLES_DIR / "dagster" / "tier1"
+DAGSTER_TIER2_DIR = EXAMPLES_DIR / "dagster" / "tier2"
 
 
 def _get_example_files(directory: Path) -> list[Path]:
     """Get all Python example files from a directory."""
+    if not directory.exists():
+        return []
     return sorted(
         p for p in directory.glob("*.py") if p.name != "__init__.py"
     )
 
 
-# Tier 1 example files
+# Example files by tier
 MARIMO_TIER1_EXAMPLES = _get_example_files(MARIMO_TIER1_DIR)
 DAGSTER_TIER1_EXAMPLES = _get_example_files(DAGSTER_TIER1_DIR)
+DAGSTER_TIER2_EXAMPLES = _get_example_files(DAGSTER_TIER2_DIR)
 
 
 @pytest.fixture(params=MARIMO_TIER1_EXAMPLES, ids=lambda p: p.stem)
@@ -33,6 +37,12 @@ def marimo_tier1_example(request: pytest.FixtureRequest) -> Path:
 @pytest.fixture(params=DAGSTER_TIER1_EXAMPLES, ids=lambda p: p.stem)
 def dagster_tier1_example(request: pytest.FixtureRequest) -> Path:
     """Parametrized fixture yielding each tier 1 dagster example."""
+    return request.param
+
+
+@pytest.fixture(params=DAGSTER_TIER2_EXAMPLES, ids=lambda p: p.stem)
+def dagster_tier2_example(request: pytest.FixtureRequest) -> Path:
+    """Parametrized fixture yielding each tier 2 dagster example."""
     return request.param
 
 
