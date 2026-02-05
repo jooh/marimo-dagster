@@ -52,6 +52,11 @@ exclude = [
     "tests/examples/**",
 ]
 
+[tool.ruff]
+exclude = [
+    "tests/examples/**",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
