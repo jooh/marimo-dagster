@@ -33,46 +33,32 @@ class DatabaseResource(ConfigurableResource):
 
 
 @dg.asset
-def raw_events(database: DatabaseResource) -> None:
+def raw_events(database: DatabaseResource) -> list[dict]:
     """Load raw events using the database resource."""
-    import json
-    from pathlib import Path
-
     # In a real scenario, this would use the database resource
     # to load data from a source table
     _ = database.query("SELECT * FROM source_events LIMIT 100")
 
     # Simulated data
-    events = [
+    return [
         {"event_id": 1, "type": "click", "timestamp": "2024-01-01T10:00:00"},
         {"event_id": 2, "type": "view", "timestamp": "2024-01-01T10:01:00"},
         {"event_id": 3, "type": "click", "timestamp": "2024-01-01T10:02:00"},
     ]
 
-    output_path = Path("data/raw_events.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(events, indent=2))
 
-
-@dg.asset(deps=["raw_events"])
-def event_counts(database: DatabaseResource) -> None:
+@dg.asset
+def event_counts(raw_events: list[dict], database: DatabaseResource) -> dict[str, int]:
     """Aggregate event counts using the database resource."""
-    import json
-    from pathlib import Path
-
-    events = json.loads(Path("data/raw_events.json").read_text())
-
-    # Count events by type
     counts: dict[str, int] = {}
-    for event in events:
+    for event in raw_events:
         event_type = event["type"]
         counts[event_type] = counts.get(event_type, 0) + 1
 
     # In real usage, might write this back to database
     database.execute("INSERT INTO event_counts VALUES (...)")
 
-    output_path = Path("data/event_counts.json")
-    output_path.write_text(json.dumps(counts, indent=2))
+    return counts
 
 
 # Resource configuration

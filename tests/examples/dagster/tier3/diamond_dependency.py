@@ -22,75 +22,43 @@ import dagster as dg
 
 
 @dg.asset
-def source() -> None:
+def source() -> dict:
     """Root asset that feeds into two downstream assets."""
-    import json
-    from pathlib import Path
-
-    data = {
+    return {
         "values": [10, 20, 30, 40, 50],
         "metadata": {"created_by": "source"},
     }
 
-    output_path = Path("data/diamond/source.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
 
-
-@dg.asset(deps=["source"])
-def left_branch() -> None:
+@dg.asset
+def left_branch(source: dict) -> dict:
     """Left branch - computes sum of values."""
-    import json
-    from pathlib import Path
-
-    source_data = json.loads(Path("data/diamond/source.json").read_text())
-
-    result = {
+    return {
         "operation": "sum",
-        "result": sum(source_data["values"]),
+        "result": sum(source["values"]),
     }
 
-    output_path = Path("data/diamond/left_branch.json")
-    output_path.write_text(json.dumps(result, indent=2))
 
-
-@dg.asset(deps=["source"])
-def right_branch() -> None:
+@dg.asset
+def right_branch(source: dict) -> dict:
     """Right branch - computes average of values."""
-    import json
-    from pathlib import Path
-
-    source_data = json.loads(Path("data/diamond/source.json").read_text())
-    values = source_data["values"]
-
-    result = {
+    values = source["values"]
+    return {
         "operation": "average",
         "result": sum(values) / len(values) if values else 0,
     }
 
-    output_path = Path("data/diamond/right_branch.json")
-    output_path.write_text(json.dumps(result, indent=2))
 
-
-@dg.asset(deps=["left_branch", "right_branch"])
-def merged() -> None:
+@dg.asset
+def merged(left_branch: dict, right_branch: dict) -> dict:
     """Merged asset - combines results from both branches."""
-    import json
-    from pathlib import Path
-
-    left = json.loads(Path("data/diamond/left_branch.json").read_text())
-    right = json.loads(Path("data/diamond/right_branch.json").read_text())
-
-    result = {
+    return {
         "combined": {
-            "sum": left["result"],
-            "average": right["result"],
+            "sum": left_branch["result"],
+            "average": right_branch["result"],
         },
         "sources": ["left_branch", "right_branch"],
     }
-
-    output_path = Path("data/diamond/merged.json")
-    output_path.write_text(json.dumps(result, indent=2))
 
 
 defs = dg.Definitions(

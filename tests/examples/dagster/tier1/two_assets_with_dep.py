@@ -19,30 +19,13 @@ import dagster as dg
 
 
 @dg.asset
-def raw_data() -> None:
+def raw_data() -> dict:
     """Upstream asset that produces raw data."""
-    import json
-    from pathlib import Path
-
-    data = {"records": [{"id": 1, "value": 100}, {"id": 2, "value": 200}]}
-
-    output_path = Path("data/raw_data.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
+    return {"records": [{"id": 1, "value": 100}, {"id": 2, "value": 200}]}
 
 
-@dg.asset(deps=["raw_data"])
-def processed_data() -> None:
+@dg.asset
+def processed_data(raw_data: dict) -> dict:
     """Downstream asset that depends on raw_data."""
-    import json
-    from pathlib import Path
-
-    input_path = Path("data/raw_data.json")
-    raw = json.loads(input_path.read_text())
-
-    # Simple transformation: calculate sum of values
-    total = sum(record["value"] for record in raw["records"])
-    result = {"total": total, "count": len(raw["records"])}
-
-    output_path = Path("data/processed_data.json")
-    output_path.write_text(json.dumps(result, indent=2))
+    total = sum(record["value"] for record in raw_data["records"])
+    return {"total": total, "count": len(raw_data["records"])}
