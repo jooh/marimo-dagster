@@ -13,56 +13,33 @@ import dagster as dg
 
 
 @dg.asset
-def daily_sales() -> None:
+def daily_sales() -> dict:
     """Asset containing daily sales data."""
-    import json
-    from pathlib import Path
-
-    data = {
+    return {
         "date": "2024-01-15",
         "total_sales": 15000.00,
         "transaction_count": 150,
     }
 
-    output_path = Path("data/daily_sales.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
-
 
 @dg.asset
-def daily_inventory() -> None:
+def daily_inventory() -> dict:
     """Asset containing daily inventory snapshot."""
-    import json
-    from pathlib import Path
-
-    data = {
+    return {
         "date": "2024-01-15",
         "total_items": 5000,
         "low_stock_items": 12,
     }
 
-    output_path = Path("data/daily_inventory.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
 
-
-@dg.asset(deps=["daily_sales", "daily_inventory"])
-def weekly_report() -> None:
+@dg.asset
+def weekly_report(daily_sales: dict, daily_inventory: dict) -> dict:
     """Weekly summary report combining sales and inventory."""
-    import json
-    from pathlib import Path
-
-    sales = json.loads(Path("data/daily_sales.json").read_text())
-    inventory = json.loads(Path("data/daily_inventory.json").read_text())
-
-    report = {
+    return {
         "report_type": "weekly",
-        "sales_summary": sales,
-        "inventory_summary": inventory,
+        "sales_summary": daily_sales,
+        "inventory_summary": daily_inventory,
     }
-
-    output_path = Path("data/weekly_report.json")
-    output_path.write_text(json.dumps(report, indent=2))
 
 
 # Define asset selections for jobs

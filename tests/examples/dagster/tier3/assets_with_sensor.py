@@ -16,15 +16,12 @@ import dagster as dg
 
 
 @dg.asset
-def adhoc_request(context: dg.AssetExecutionContext) -> None:
+def adhoc_request(context: dg.AssetExecutionContext) -> dict:
     """Process an ad-hoc data request.
 
     This asset is triggered by the sensor when new request files appear.
     The request configuration is passed via run config.
     """
-    from pathlib import Path
-
-    # Get config from run config (would be populated by sensor)
     config = context.op_execution_context.op_config
     filename = config.get("filename", "unknown")
     request_type = config.get("request_type", "default")
@@ -33,16 +30,12 @@ def adhoc_request(context: dg.AssetExecutionContext) -> None:
     context.log.info(f"Processing request from file: {filename}")
     context.log.info(f"Request type: {request_type}")
 
-    result = {
+    return {
         "source_file": filename,
         "request_type": request_type,
         "parameters": parameters,
         "status": "completed",
     }
-
-    output_path = Path(f"data/adhoc_results/{filename}")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, indent=2))
 
 
 # Define a job for the sensor to trigger

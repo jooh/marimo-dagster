@@ -25,69 +25,44 @@ weekly_partition = dg.WeeklyPartitionsDefinition(
 
 
 @dg.asset(partitions_def=monthly_partition)
-def monthly_sales_data(context: dg.AssetExecutionContext) -> None:
+def monthly_sales_data(context: dg.AssetExecutionContext) -> dict:
     """Monthly sales data, partitioned by month."""
-    import json
-    from pathlib import Path
-
     partition_key = context.partition_key
     context.log.info(f"Processing partition: {partition_key}")
 
-    # Simulated data for this partition
-    data = {
+    return {
         "month": partition_key,
         "total_sales": 50000.00,
         "orders": 500,
     }
 
-    output_path = Path(f"data/monthly_sales/{partition_key}.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
-
 
 @dg.asset(partitions_def=weekly_partition)
-def weekly_metrics(context: dg.AssetExecutionContext) -> None:
+def weekly_metrics(context: dg.AssetExecutionContext) -> dict:
     """Weekly metrics, partitioned by week."""
-    import json
-    from pathlib import Path
-
     partition_key = context.partition_key
     context.log.info(f"Processing partition: {partition_key}")
 
-    data = {
+    return {
         "week_start": partition_key,
         "active_users": 1200,
         "page_views": 45000,
     }
 
-    output_path = Path(f"data/weekly_metrics/{partition_key}.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
 
-
-@dg.asset(
-    partitions_def=monthly_partition,
-    deps=["monthly_sales_data"],
-)
-def monthly_sales_report(context: dg.AssetExecutionContext) -> None:
+@dg.asset(partitions_def=monthly_partition)
+def monthly_sales_report(
+    context: dg.AssetExecutionContext, monthly_sales_data: dict
+) -> dict:
     """Monthly report derived from partitioned sales data."""
-    import json
-    from pathlib import Path
-
     partition_key = context.partition_key
 
-    input_path = Path(f"data/monthly_sales/{partition_key}.json")
-    sales_data = json.loads(input_path.read_text())
-
-    report = {
+    return {
         "month": partition_key,
-        "summary": f"Total sales: ${sales_data['total_sales']:,.2f}",
-        "avg_order_value": sales_data["total_sales"] / sales_data["orders"],
+        "summary": f"Total sales: ${monthly_sales_data['total_sales']:,.2f}",
+        "avg_order_value": monthly_sales_data["total_sales"]
+        / monthly_sales_data["orders"],
     }
-
-    output_path = Path(f"data/monthly_reports/{partition_key}.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, indent=2))
 
 
 # Schedule that runs for the previous month's partition

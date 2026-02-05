@@ -19,13 +19,6 @@ import dagster as dg
 
 
 @dg.asset
-def my_data() -> None:
-    """A simple asset that writes static data to a file."""
-    data = {"message": "Hello from Dagster!", "values": [1, 2, 3]}
-
-    import json
-    from pathlib import Path
-
-    output_path = Path("data/my_data.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(data, indent=2))
+def my_data() -> dict:
+    """A simple asset that produces static data."""
+    return {"message": "Hello from Dagster!", "values": [1, 2, 3]}
