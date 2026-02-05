@@ -1,6 +1,6 @@
 [project]
 name = "marimo-dagster"
-version = "0.0.1"
+version = "0.0.2"
 description = "Take Marimo notebooks to production as Dagster assets"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -47,6 +47,11 @@ fail_under = 100
 show_missing = true
 skip_covered = true
 
+[tool.ty.src]
+exclude = [
+    "tests/examples/**",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
@@ -55,8 +60,3 @@ dev = [
     "tomli-w>=1.0.0",
     "ty>=0.0.14",
 ]
-
-[tool.ty.src]
-# Exclude test examples that use external dependencies (dagster, pandas)
-# not installed in the dev environment
-exclude = ["tests/examples/**"]
