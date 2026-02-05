@@ -55,3 +55,8 @@ dev = [
     "tomli-w>=1.0.0",
     "ty>=0.0.14",
 ]
+
+[tool.ty.src]
+# Exclude test examples that use external dependencies (dagster, pandas)
+# not installed in the dev environment
+exclude = ["tests/examples/**"]
