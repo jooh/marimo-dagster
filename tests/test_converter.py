@@ -175,3 +175,94 @@ class TestRoundTrip:
         # Verify dependency graph preserved
         for orig, rt in zip(original_ir.cells, roundtrip_ir.cells):
             assert set(rt.inputs) == set(orig.inputs)
+
+
+class TestAllExamplesConversion:
+    """Tests that all examples across all tiers produce valid output."""
+
+    def test_dagster_to_marimo_all_examples(
+        self, dagster_all_example: Path
+    ) -> None:
+        """Every dagster example should produce valid marimo Python."""
+        source = dagster_all_example.read_text()
+        result = dagster_to_marimo(source)
+        ast.parse(result)
+        assert "import marimo" in result
+        assert "@app.cell" in result
+
+    def test_marimo_to_dagster_all_examples(
+        self, marimo_all_example: Path
+    ) -> None:
+        """Every marimo example should produce valid dagster Python."""
+        source = marimo_all_example.read_text()
+        result = marimo_to_dagster(source)
+        ast.parse(result)
+        assert "import dagster as dg" in result
+
+
+class TestDagsterConversionPreservesAssets:
+    """Tests that dagster → marimo conversion preserves asset structure."""
+
+    def test_dagster_to_marimo_preserves_asset_count(
+        self, dagster_all_example: Path
+    ) -> None:
+        """Number of @dg.asset functions should match number of code cells."""
+        from marimo_dagster._dagster_ast import parse_dagster
+        from marimo_dagster._marimo_ast import parse_marimo
+        from marimo_dagster._ir import CellType
+
+        original_ir = parse_dagster(dagster_all_example.read_text())
+        result = dagster_to_marimo(dagster_all_example.read_text())
+        marimo_ir = parse_marimo(result)
+
+        # Each dagster asset becomes a CODE cell in marimo (plus docstring
+        # markdown cells). Count CODE cells only.
+        code_cells = [c for c in marimo_ir.cells if c.cell_type == CellType.CODE]
+        assert len(code_cells) == len(original_ir.cells)
+
+
+class TestMarimoConversionCellLoss:
+    """Tests documenting which marimo cells survive dagster conversion.
+
+    generate_dagster only emits CellType.CODE cells, so MARKDOWN, SQL, UI,
+    and DISPLAY_ONLY cells are dropped. These tests quantify that behavior.
+    """
+
+    def test_only_code_cells_survive(
+        self, marimo_all_example: Path
+    ) -> None:
+        """Only CODE cells from marimo should become dagster assets."""
+        from marimo_dagster._dagster_ast import parse_dagster
+        from marimo_dagster._marimo_ast import parse_marimo
+        from marimo_dagster._ir import CellType
+
+        source = marimo_all_example.read_text()
+        marimo_ir = parse_marimo(source)
+        dagster_source = marimo_to_dagster(source)
+        dagster_ir = parse_dagster(dagster_source)
+
+        code_cells = [c for c in marimo_ir.cells if c.cell_type == CellType.CODE]
+        assert len(dagster_ir.cells) == len(code_cells)
+
+
+class TestDagsterRoundTripAllTiers:
+    """Round-trip tests for all dagster examples including tier 2/3."""
+
+    def test_roundtrip_preserves_asset_names(
+        self, dagster_all_example: Path
+    ) -> None:
+        """dagster -> marimo -> dagster should preserve asset names."""
+        from marimo_dagster._dagster_ast import parse_dagster
+
+        original_source = dagster_all_example.read_text()
+        marimo_source = dagster_to_marimo(original_source)
+        roundtrip_source = marimo_to_dagster(marimo_source)
+
+        ast.parse(roundtrip_source)
+
+        original_ir = parse_dagster(original_source)
+        roundtrip_ir = parse_dagster(roundtrip_source)
+
+        original_names = [c.name for c in original_ir.cells]
+        roundtrip_names = [c.name for c in roundtrip_ir.cells]
+        assert roundtrip_names == original_names
