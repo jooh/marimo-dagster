@@ -2,9 +2,10 @@
 
 import ast
 from pathlib import Path
+from unittest.mock import patch
 
 from marimo_dagster._ir import CellNode, CellType, ImportItem, NotebookIR, ScriptMetadata
-from marimo_dagster._marimo_ast import generate_marimo, parse_marimo
+from marimo_dagster._marimo_ast import _marimo_version, generate_marimo, parse_marimo
 
 EXAMPLES_DIR = Path(__file__).parent / "examples"
 
@@ -30,6 +31,11 @@ class TestGenerateMarimoStructure:
         ir = NotebookIR(cells=[])
         result = generate_marimo(ir)
         assert "import marimo" in result
+
+    def test_has_generated_with(self) -> None:
+        ir = NotebookIR(cells=[])
+        result = generate_marimo(ir)
+        assert "__generated_with" in result
 
     def test_has_app_creation(self) -> None:
         ir = NotebookIR(cells=[])
@@ -785,3 +791,22 @@ class TestGenerateMarimoEdgeCases:
         )
         result = generate_marimo(ir)
         assert "return (x, y)" in result
+
+
+class TestMarimoVersion:
+    """Tests for the _marimo_version helper."""
+
+    def test_returns_installed_version(self) -> None:
+        result = _marimo_version()
+        # Should be a non-empty version string when marimo is installed
+        assert result
+        assert result != "0.0.0"
+
+    def test_returns_fallback_when_not_installed(self) -> None:
+        from importlib.metadata import PackageNotFoundError
+
+        with patch(
+            "marimo_dagster._marimo_ast.version",
+            side_effect=PackageNotFoundError("marimo"),
+        ):
+            assert _marimo_version() == "0.0.0"

@@ -2,9 +2,18 @@
 
 import ast
 import textwrap
+from importlib.metadata import PackageNotFoundError, version
 
 from marimo_dagster._ir import CellNode, CellType, ImportItem, NotebookIR
 from marimo_dagster._metadata import generate_pep723_metadata, parse_pep723_metadata
+
+
+def _marimo_version() -> str:
+    """Return the installed marimo version, or a fallback."""
+    try:
+        return version("marimo")
+    except PackageNotFoundError:
+        return "0.0.0"
 
 _MARIMO_MODULES = {"marimo"}
 _FRAMEWORK_PARAMS = {"mo"}
@@ -236,7 +245,10 @@ def generate_marimo(ir: NotebookIR) -> str:
 
     # Marimo preamble
     sections.append("import marimo")
-    sections.append('app = marimo.App(width="medium")')
+    sections.append(
+        f'__generated_with = "{_marimo_version()}"\n'
+        f'app = marimo.App(width="medium")'
+    )
 
     # Import cell (always generated — at minimum provides `mo`)
     sections.append(_generate_import_cell(ir.imports))
