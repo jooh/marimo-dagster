@@ -734,17 +734,27 @@ class TestParseDagsterTier2Resources:
         cell_names = [c.name for c in ir.cells]
         assert "DatabaseResource" not in cell_names
 
-    def test_resource_param_appears_as_input(self) -> None:
-        """Currently resource params are not filtered — they appear as inputs.
+    def test_resource_param_filtered(self) -> None:
+        """Resource params should be filtered from inputs.
 
-        This documents the current behavior. The resource parameter `database`
-        is treated as a data dependency because _is_framework_param only
-        filters AssetExecutionContext.
+        The `database: DatabaseResource` parameter is a dagster resource,
+        not a data dependency. It should not appear in inputs.
         """
         source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
         ir = parse_dagster(source)
-        assert "database" in ir.cells[0].inputs
-        assert "database" in ir.cells[1].inputs
+        assert "database" not in ir.cells[0].inputs
+        assert "database" not in ir.cells[1].inputs
+
+    def test_resource_body_calls_stripped(self) -> None:
+        """Bare calls and discarded assignments to resource vars are stripped."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        # raw_events: `_ = database.query(...)` should be stripped
+        body0 = "\n".join(ast.unparse(s) for s in ir.cells[0].body_stmts)
+        assert "database.query" not in body0
+        # event_counts: `database.execute(...)` should be stripped
+        body1 = "\n".join(ast.unparse(s) for s in ir.cells[1].body_stmts)
+        assert "database.execute" not in body1
 
     def test_data_dependency_preserved(self) -> None:
         """event_counts depends on raw_events (a real data dependency)."""
@@ -871,29 +881,26 @@ class TestParseDagsterTier3GroupsMetadata:
         pd_import = next(i for i in ir.imports if i.module == "pandas")
         assert pd_import.alias == "pd"
 
-    def test_decorator_args_dropped(self) -> None:
-        """group_name, compute_kind etc. are not preserved in IR.
-
-        The current parser recognizes @dg.asset(...) but doesn't extract
-        keyword arguments from the decorator.
-        """
+    def test_decorator_kwargs_preserved(self) -> None:
+        """group_name, compute_kind, description should be in decorator_kwargs."""
         source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
         ir = parse_dagster(source)
-        # All cells are plain CODE type — no group/kind metadata in IR
+        # api_data: group_name="ingestion", compute_kind="API"
+        assert ir.cells[0].decorator_kwargs["group_name"] == "ingestion"
+        assert ir.cells[0].decorator_kwargs["compute_kind"] == "API"
+        # summary_stats: group_name="reporting", compute_kind="Analysis", description=...
+        assert ir.cells[2].decorator_kwargs["group_name"] == "reporting"
+        assert ir.cells[2].decorator_kwargs["compute_kind"] == "Analysis"
+        assert "summary statistics" in ir.cells[2].decorator_kwargs["description"]
+
+    def test_context_body_calls_stripped(self) -> None:
+        """context.add_output_metadata() and context.log.info() should be stripped."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
         for cell in ir.cells:
-            assert cell.cell_type == CellType.CODE
-
-    def test_context_body_calls_remain(self) -> None:
-        """context.add_output_metadata() calls remain in body stmts.
-
-        This documents current behavior: context param is stripped but
-        references to context in the body are not removed.
-        """
-        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
-        ir = parse_dagster(source)
-        # api_data body should contain context.add_output_metadata
-        api_body = "\n".join(ast.unparse(s) for s in ir.cells[0].body_stmts)
-        assert "context.add_output_metadata" in api_body
+            body = "\n".join(ast.unparse(s) for s in cell.body_stmts)
+            assert "context.add_output_metadata" not in body
+            assert "context.log.info" not in body
 
     def test_docstrings_preserved(self) -> None:
         source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
@@ -944,12 +951,13 @@ class TestParseDagsterTier3Partitions:
         assert "monthly_partition" not in cell_names
         assert "weekly_partition" not in cell_names
 
-    def test_context_body_calls_remain(self) -> None:
-        """context.log.info() calls remain in body."""
+    def test_context_body_calls_stripped(self) -> None:
+        """context.log.info() calls should be stripped from body."""
         source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
         ir = parse_dagster(source)
-        body = "\n".join(ast.unparse(s) for s in ir.cells[0].body_stmts)
-        assert "context.log.info" in body
+        for cell in ir.cells:
+            body = "\n".join(ast.unparse(s) for s in cell.body_stmts)
+            assert "context.log.info" not in body
 
 
 class TestParseDagsterTier3Sensor:
@@ -982,3 +990,112 @@ class TestParseDagsterTier3Sensor:
         ir = parse_dagster(source)
         cell_names = [c.name for c in ir.cells]
         assert "adhoc_request_job" not in cell_names
+
+
+class TestDecoratorDescription:
+    """Tests for extracting @dg.asset(description=...) as docstring."""
+
+    def test_description_used_when_no_docstring(self) -> None:
+        """description= kwarg should become docstring if function has none."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset(description="Loads raw data from source.")\n'
+            'def raw_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring == "Loads raw data from source."
+
+    def test_existing_docstring_takes_precedence(self) -> None:
+        """If function has a docstring, description= should NOT overwrite it."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset(description="Decorator description.")\n'
+            'def raw_data() -> dict:\n'
+            '    """Function docstring."""\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring == "Function docstring."
+        # description still in decorator_kwargs
+        assert ir.cells[0].decorator_kwargs["description"] == "Decorator description."
+
+
+class TestGenerateDagsterDecoratorKwargs:
+    """Tests for generating @dg.asset(...) with keyword arguments."""
+
+    def test_kwargs_emitted_in_decorator(self) -> None:
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="x",
+                    body_stmts=ast.parse("x = 1").body,
+                    inputs=[],
+                    outputs=["x"],
+                    decorator_kwargs={"group_name": "ingestion", "compute_kind": "API"},
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert 'group_name="ingestion"' in result
+        assert 'compute_kind="API"' in result
+
+    def test_no_kwargs_plain_decorator(self) -> None:
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="x",
+                    body_stmts=ast.parse("x = 1").body,
+                    inputs=[],
+                    outputs=["x"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "@dg.asset\n" in result
+
+
+class TestResourceParamAttributeForm:
+    """Tests for resource classes using dg.ConfigurableResource attribute form."""
+
+    def test_resource_via_dg_attribute(self) -> None:
+        """class Foo(dg.ConfigurableResource) should be detected as resource."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            'class MyResource(dg.ConfigurableResource):\n'
+            '    url: str\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data(resource: MyResource) -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert "resource" not in ir.cells[0].inputs
+
+    def test_non_dagster_resource_attribute_not_detected(self) -> None:
+        """class Foo(other.ConfigurableResource) should NOT be treated as resource."""
+        source = (
+            'import dagster as dg\n'
+            'import other\n'
+            '\n'
+            'class MyResource(other.ConfigurableResource):\n'
+            '    url: str\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data(resource: MyResource) -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        # MyResource is NOT from dagster, so resource param is kept as input
+        assert "resource" in ir.cells[0].inputs
+
+    def test_call_chain_root_non_name(self) -> None:
+        """_call_chain_root should return None for non-Name roots."""
+        from marimo_dagster._dagster_ast import _call_chain_root
+
+        # func()[0].method() — root is a Call, not a Name
+        node = ast.parse("func()[0].method()").body[0].value.func  # type: ignore[union-attr]
+        assert _call_chain_root(node) is None

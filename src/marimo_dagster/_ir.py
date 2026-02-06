@@ -39,6 +39,7 @@ class CellNode:
     cell_type: CellType = CellType.CODE
     docstring: str | None = None
     return_type_annotation: str | None = None
+    decorator_kwargs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
