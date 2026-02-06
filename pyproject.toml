@@ -1,6 +1,6 @@
 [project]
 name = "marimo-dagster"
-version = "0.0.7"
+version = "0.0.8"
 description = "Take Marimo notebooks to production as Dagster assets"
 readme = "README.md"
 requires-python = ">=3.12"
