@@ -1,13 +1,11 @@
 """Tests for marimo AST parsing and generation."""
 
 import ast
-from pathlib import Path
 from unittest.mock import patch
 
+from conftest import EXAMPLES_DIR
 from marimo_dagster._ir import CellNode, CellType, ImportItem, NotebookIR, ScriptMetadata
 from marimo_dagster._marimo_ast import _marimo_version, generate_marimo, parse_marimo
-
-EXAMPLES_DIR = Path(__file__).parent / "examples"
 
 
 class TestGenerateMarimoStructure:

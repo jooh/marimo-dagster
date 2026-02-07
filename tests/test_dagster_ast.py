@@ -1,12 +1,10 @@
 """Tests for dagster AST parsing and generation."""
 
 import ast
-from pathlib import Path
 
+from conftest import EXAMPLES_DIR
 from marimo_dagster._dagster_ast import generate_dagster, parse_dagster
 from marimo_dagster._ir import CellNode, CellType, ImportItem, NotebookIR, ScriptMetadata
-
-EXAMPLES_DIR = Path(__file__).parent / "examples"
 
 
 class TestParseDagsterSimple:

@@ -1,15 +1,12 @@
 """Tests for PEP 723 script metadata parsing and generation."""
 
-from pathlib import Path
-
+from conftest import EXAMPLES_DIR
 from marimo_dagster._ir import ScriptMetadata
 from marimo_dagster._metadata import (
     generate_pep723_metadata,
     parse_pep723_metadata,
     transform_dependencies,
 )
-
-EXAMPLES_DIR = Path(__file__).parent / "examples"
 
 
 class TestParsePep723Metadata:

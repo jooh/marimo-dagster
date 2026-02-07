@@ -1,4 +1,4 @@
-"""Dagster AST parsing and generation."""
+"""Parse dagster asset modules into IR and generate dagster source from IR."""
 
 import ast
 
@@ -85,18 +85,7 @@ def generate_dagster(ir: NotebookIR) -> str:
     # Imports
     import_lines = ["import dagster as dg"]
     for imp in ir.imports:
-        if imp.names is not None:
-            name_parts = []
-            for name, alias in imp.names:
-                if alias:
-                    name_parts.append(f"{name} as {alias}")
-                else:
-                    name_parts.append(name)
-            import_lines.append(f"from {imp.module} import {', '.join(name_parts)}")
-        elif imp.alias:
-            import_lines.append(f"import {imp.module} as {imp.alias}")
-        else:
-            import_lines.append(f"import {imp.module}")
+        import_lines.append(imp.format_statement())
     sections.append("\n".join(import_lines))
 
     # Asset functions (only CODE cells)
@@ -147,27 +136,22 @@ def _is_dagster_asset(
 ) -> bool:
     """Check if a function is decorated with a dagster asset decorator.
 
-    Supports attribute forms (@dg.asset, @dagster.asset) and bare name forms
-    (@asset) when the name is in asset_names (tracked from `from dagster import asset`).
+    Supports attribute forms (@dg.asset, @dagster.asset), call forms
+    (@dg.asset(...)), and bare name forms (@asset) when the name is in
+    asset_names (tracked from ``from dagster import asset``).
     """
     _asset_names = asset_names or set()
     for dec in node.decorator_list:
-        # @dg.asset / @dagster.asset
+        # @dg.asset / @dagster.asset (non-call attribute form)
         if isinstance(dec, ast.Attribute) and dec.attr == "asset":
             if isinstance(dec.value, ast.Name) and dec.value.id in ("dg", "dagster"):
                 return True
-        # @dg.asset(...) / @dagster.asset(...)
-        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
-            if dec.func.attr == "asset" and isinstance(dec.func.value, ast.Name):
-                if dec.func.value.id in ("dg", "dagster"):
-                    return True
         # @asset (bare name from `from dagster import asset`)
         if isinstance(dec, ast.Name) and dec.id in _asset_names:
             return True
-        # @asset(...) (bare call from `from dagster import asset`)
-        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name):
-            if dec.func.id in _asset_names:
-                return True
+        # Call forms: @dg.asset(...), @dagster.asset(...), @asset(...)
+        if isinstance(dec, ast.Call) and _is_asset_decorator_call(dec, asset_names=_asset_names):
+            return True
     return False
 
 

@@ -1,4 +1,4 @@
-"""Marimo AST parsing and generation."""
+"""Parse marimo notebooks into IR and generate marimo source from IR."""
 
 import ast
 import textwrap
@@ -149,8 +149,8 @@ def _classify_cell(
         return CellType.DISPLAY_ONLY
 
     # Check for mo.* calls
-    has_mo_sql = _has_call_pattern(body_stmts, "mo", "sql")
-    has_mo_ui = _has_mo_ui_or_widget(body_stmts)
+    has_mo_sql = _has_method_call(body_stmts, "mo", "sql")
+    has_mo_ui = _has_marimo_ui_element(body_stmts)
 
     # Markdown: single statement is a top-level mo.md() call
     if len(body_stmts) == 1 and not outputs and _is_top_level_mo_call(body_stmts[0], "md"):
@@ -182,7 +182,7 @@ def _is_top_level_mo_call(stmt: ast.stmt, method: str) -> bool:
     )
 
 
-def _has_call_pattern(stmts: list[ast.stmt], obj: str, method: str) -> bool:
+def _has_method_call(stmts: list[ast.stmt], obj: str, method: str) -> bool:
     """Check if any statement contains a call to obj.method()."""
     for stmt in stmts:
         for node in ast.walk(stmt):
@@ -197,9 +197,9 @@ def _has_call_pattern(stmts: list[ast.stmt], obj: str, method: str) -> bool:
     return False
 
 
-def _has_mo_ui_or_widget(stmts: list[ast.stmt]) -> bool:
-    """Check if any statement contains mo.ui.*, mo.accordion, etc."""
-    _widget_methods = {"accordion", "hstack", "vstack", "tabs", "icon"}
+def _has_marimo_ui_element(stmts: list[ast.stmt]) -> bool:
+    """Check if any statement contains marimo UI elements (mo.ui.*, mo.accordion, etc.)."""
+    _layout_methods = {"accordion", "hstack", "vstack", "tabs", "icon"}
     for stmt in stmts:
         for node in ast.walk(stmt):
             if isinstance(node, ast.Attribute):
@@ -213,7 +213,7 @@ def _has_mo_ui_or_widget(stmts: list[ast.stmt]) -> bool:
                     return True
                 # mo.accordion, mo.hstack, etc.
                 if (
-                    node.attr in _widget_methods
+                    node.attr in _layout_methods
                     and isinstance(node.value, ast.Name)
                     and node.value.id == "mo"
                 ):
@@ -275,25 +275,8 @@ def _generate_import_cell(imports: list[ImportItem]) -> str:
     return_names: list[str] = ["mo"]
 
     for imp in imports:
-        if imp.names is not None:
-            # from X import a, b
-            name_parts = []
-            for name, alias in imp.names:
-                if alias:
-                    name_parts.append(f"{name} as {alias}")
-                    return_names.append(alias)
-                else:
-                    name_parts.append(name)
-                    return_names.append(name)
-            lines.append(f"    from {imp.module} import {', '.join(name_parts)}")
-        else:
-            # import X [as alias]
-            if imp.alias:
-                lines.append(f"    import {imp.module} as {imp.alias}")
-                return_names.append(imp.alias)
-            else:
-                lines.append(f"    import {imp.module}")
-                return_names.append(imp.module)
+        lines.append(f"    {imp.format_statement()}")
+        return_names.extend(imp.exported_names())
 
     lines.append(f"    return ({', '.join(return_names)})")
     return "\n".join(lines)
@@ -312,12 +295,8 @@ def _generate_markdown_cell(text: str) -> str:
     )
 
 
-def _generate_code_cell(cell: "CellNode") -> str:  # noqa: F821
-    """Generate a code cell from a CellNode."""
-    from marimo_dagster._ir import CellNode  # avoid circular at module level
-
-    assert isinstance(cell, CellNode)
-
+def _generate_code_cell(cell: CellNode) -> str:
+    """Generate a marimo @app.cell function from a CellNode."""
     # Build parameter list
     params = ", ".join(cell.inputs) if cell.inputs else ""
 
