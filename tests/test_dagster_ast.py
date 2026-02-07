@@ -1651,3 +1651,103 @@ class TestParseMultiAsset:
         ir = parse_dagster(source)
         # Only "b" is extractable; NAME is a variable reference, not a string literal
         assert ir.cells[0].outputs == ["b"]
+
+    def test_multi_output_return_type_annotation(self) -> None:
+        """multi_asset should include return type annotation when present."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nstats = 2").body,
+                    inputs=[],
+                    outputs=["chart", "stats"],
+                    return_type_annotation="tuple[int, int]",
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "-> tuple[int, int]:" in result
+        ast.parse(result)
+
+    def test_parse_multi_asset_return_type_preserved(self) -> None:
+        """Return type annotation should survive multi_asset roundtrip."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a() -> tuple[int, int]:\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].return_type_annotation == "tuple[int, int]"
+
+    def test_bare_multi_asset_decorator(self) -> None:
+        """@multi_asset from `from dagster import multi_asset` should be recognized."""
+        source = (
+            'from dagster import multi_asset, AssetOut\n'
+            '\n'
+            '@multi_asset(\n'
+            '    outs={\n'
+            '        "a": AssetOut(),\n'
+            '        "b": AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].outputs == ["a", "b"]
+
+    def test_bare_aliased_multi_asset_decorator(self) -> None:
+        """@ma from `from dagster import multi_asset as ma` should be recognized."""
+        source = (
+            'from dagster import multi_asset as ma, AssetOut\n'
+            '\n'
+            '@ma(\n'
+            '    outs={\n'
+            '        "x": AssetOut(),\n'
+            '        "y": AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def x():\n'
+            '    x = 1\n'
+            '    y = 2\n'
+            '    return x, y\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].outputs == ["x", "y"]
+
+    def test_bare_non_multi_asset_not_matched(self) -> None:
+        """@op(...) from dagster should not match as multi_asset."""
+        source = (
+            'from dagster import multi_asset, AssetOut, op\n'
+            '\n'
+            '@op()\n'
+            'def my_op():\n'
+            '    return 1\n'
+            '\n'
+            '@multi_asset(\n'
+            '    outs={\n'
+            '        "a": AssetOut(),\n'
+            '        "b": AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "a"
