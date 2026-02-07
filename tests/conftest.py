@@ -19,9 +19,24 @@ def _get_example_files(directory: Path) -> list[Path]:
     )
 
 
+def _get_all_example_files(framework_dir: Path) -> list[Path]:
+    """Get all Python example files across all tiers."""
+    return sorted(
+        p
+        for tier in framework_dir.iterdir()
+        if tier.is_dir()
+        for p in tier.glob("*.py")
+        if p.name != "__init__.py"
+    )
+
+
 # Tier 1 example files
 MARIMO_TIER1_EXAMPLES = _get_example_files(MARIMO_TIER1_DIR)
 DAGSTER_TIER1_EXAMPLES = _get_example_files(DAGSTER_TIER1_DIR)
+
+# All example files (all tiers)
+ALL_MARIMO_EXAMPLES = _get_all_example_files(EXAMPLES_DIR / "marimo")
+ALL_DAGSTER_EXAMPLES = _get_all_example_files(EXAMPLES_DIR / "dagster")
 
 
 @pytest.fixture(params=MARIMO_TIER1_EXAMPLES, ids=lambda p: p.stem)
@@ -33,6 +48,24 @@ def marimo_tier1_example(request: pytest.FixtureRequest) -> Path:
 @pytest.fixture(params=DAGSTER_TIER1_EXAMPLES, ids=lambda p: p.stem)
 def dagster_tier1_example(request: pytest.FixtureRequest) -> Path:
     """Parametrized fixture yielding each tier 1 dagster example."""
+    return request.param
+
+
+@pytest.fixture(
+    params=ALL_MARIMO_EXAMPLES,
+    ids=lambda p: f"{p.parent.name}/{p.stem}",
+)
+def marimo_all_example(request: pytest.FixtureRequest) -> Path:
+    """Parametrized fixture yielding every marimo example across all tiers."""
+    return request.param
+
+
+@pytest.fixture(
+    params=ALL_DAGSTER_EXAMPLES,
+    ids=lambda p: f"{p.parent.name}/{p.stem}",
+)
+def dagster_all_example(request: pytest.FixtureRequest) -> Path:
+    """Parametrized fixture yielding every dagster example across all tiers."""
     return request.param
 
 

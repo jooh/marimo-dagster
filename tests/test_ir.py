@@ -163,3 +163,21 @@ class TestNotebookIR:
         ir = NotebookIR(cells=[cell_a, cell_b])
         # Dependency is implicit: cell_b.inputs references cell_a.outputs
         assert ir.cells[1].inputs[0] in ir.cells[0].outputs
+
+    def test_cell_decorator_kwargs_default(self) -> None:
+        """decorator_kwargs should default to empty dict."""
+        cell = CellNode(
+            name="x", body_stmts=[], inputs=[], outputs=["x"]
+        )
+        assert cell.decorator_kwargs == {}
+
+    def test_cell_decorator_kwargs_with_values(self) -> None:
+        cell = CellNode(
+            name="x",
+            body_stmts=[],
+            inputs=[],
+            outputs=["x"],
+            decorator_kwargs={"group_name": "ingestion", "compute_kind": "API"},
+        )
+        assert cell.decorator_kwargs["group_name"] == "ingestion"
+        assert cell.decorator_kwargs["compute_kind"] == "API"

@@ -810,3 +810,261 @@ class TestMarimoVersion:
             side_effect=PackageNotFoundError("marimo"),
         ):
             assert _marimo_version() == "0.0.0"
+
+
+class TestParseMarimoTier2Sqlite:
+    """Tests for parse_marimo with connect_to_sqlite.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/connect_to_sqlite.py").read_text()
+        ir = parse_marimo(source)
+        assert len(ir.cells) == 7
+
+    def test_has_markdown_cells(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/connect_to_sqlite.py").read_text()
+        ir = parse_marimo(source)
+        md_cells = [c for c in ir.cells if c.cell_type == CellType.MARKDOWN]
+        assert len(md_cells) == 3
+
+    def test_has_sql_cells(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/connect_to_sqlite.py").read_text()
+        ir = parse_marimo(source)
+        sql_cells = [c for c in ir.cells if c.cell_type == CellType.SQL]
+        assert len(sql_cells) == 2
+
+    def test_has_ui_cell(self) -> None:
+        """The accordion tip cell should be classified as UI."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/connect_to_sqlite.py").read_text()
+        ir = parse_marimo(source)
+        ui_cells = [c for c in ir.cells if c.cell_type == CellType.UI]
+        assert len(ui_cells) == 1
+
+    def test_mixed_import_code_cell(self) -> None:
+        """Cell with imports + function def + call is CODE, not IMPORT_ONLY."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/connect_to_sqlite.py").read_text()
+        ir = parse_marimo(source)
+        code_cells = [c for c in ir.cells if c.cell_type == CellType.CODE]
+        # The cell that imports mo and defines download_sample_data
+        assert len(code_cells) == 1
+        assert "mo" in code_cells[0].outputs
+
+    def test_metadata_parsed(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/connect_to_sqlite.py").read_text()
+        ir = parse_marimo(source)
+        assert ir.metadata.requires_python == ">=3.9"
+        assert "marimo" in ir.metadata.dependencies
+
+
+class TestParseMarimoTier2ParametrizedSql:
+    """Tests for parse_marimo with parametrizing_sql_queries.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        assert len(ir.cells) == 9
+
+    def test_has_sql_cell(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        sql_cells = [c for c in ir.cells if c.cell_type == CellType.SQL]
+        assert len(sql_cells) == 1
+
+    def test_sql_cell_depends_on_dataframe_and_dropdown(self) -> None:
+        """SQL cell references df and species_dropdown."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        sql_cells = [c for c in ir.cells if c.cell_type == CellType.SQL]
+        assert "df" in sql_cells[0].inputs
+        assert "species_dropdown" in sql_cells[0].inputs
+
+    def test_sql_cell_has_output(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        sql_cells = [c for c in ir.cells if c.cell_type == CellType.SQL]
+        assert "result" in sql_cells[0].outputs
+
+    def test_dropdown_ui_is_code_cell_with_output(self) -> None:
+        """Dropdown cell has an output so it's classified as CODE, not UI."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        code_cells = [c for c in ir.cells if c.cell_type == CellType.CODE]
+        dropdown_cell = next(
+            (c for c in code_cells if "species_dropdown" in c.outputs), None
+        )
+        assert dropdown_cell is not None
+
+    def test_has_markdown_cells(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        md_cells = [c for c in ir.cells if c.cell_type == CellType.MARKDOWN]
+        assert len(md_cells) == 4
+
+    def test_display_only_cell(self) -> None:
+        """The bare `result` display cell."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/parametrizing_sql_queries.py").read_text()
+        ir = parse_marimo(source)
+        display_cells = [c for c in ir.cells if c.cell_type == CellType.DISPLAY_ONLY]
+        assert len(display_cells) == 1
+        assert "result" in display_cells[0].inputs
+
+
+class TestParseMarimoTier2Duckdb:
+    """Tests for parse_marimo with duckdb_example.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/duckdb_example.py").read_text()
+        ir = parse_marimo(source)
+        assert len(ir.cells) == 3
+
+    def test_imports_extracted(self) -> None:
+        """altair import should be extracted from import cell."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/duckdb_example.py").read_text()
+        ir = parse_marimo(source)
+        modules = [imp.module for imp in ir.imports]
+        assert "altair" in modules
+
+    def test_has_sql_cell(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/duckdb_example.py").read_text()
+        ir = parse_marimo(source)
+        sql_cells = [c for c in ir.cells if c.cell_type == CellType.SQL]
+        assert len(sql_cells) == 1
+
+    def test_sql_cell_depends_on_slider(self) -> None:
+        """SQL cell uses digits slider value."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/duckdb_example.py").read_text()
+        ir = parse_marimo(source)
+        sql_cells = [c for c in ir.cells if c.cell_type == CellType.SQL]
+        assert "digits" in sql_cells[0].inputs
+
+    def test_slider_cell_is_code(self) -> None:
+        """Slider cell has output so it's CODE, not UI."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/duckdb_example.py").read_text()
+        ir = parse_marimo(source)
+        code_cells = [c for c in ir.cells if c.cell_type == CellType.CODE]
+        slider_cell = next(
+            (c for c in code_cells if "digits" in c.outputs), None
+        )
+        assert slider_cell is not None
+
+    def test_viz_cell_depends_on_sql_result(self) -> None:
+        """Visualization cell depends on result and alt."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier2/duckdb_example.py").read_text()
+        ir = parse_marimo(source)
+        code_cells = [c for c in ir.cells if c.cell_type == CellType.CODE]
+        viz_cell = next(
+            (c for c in code_cells if "alt" in c.inputs and "result" in c.inputs),
+            None,
+        )
+        assert viz_cell is not None
+
+
+class TestParseMarimoTier3Polars:
+    """Tests for parse_marimo with polars_example.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        assert len(ir.cells) == 7
+
+    def test_imports_extracted(self) -> None:
+        """polars, numpy, altair imports should be extracted."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        modules = [imp.module for imp in ir.imports]
+        assert "polars" in modules
+        assert "numpy" in modules
+        assert "altair" in modules
+
+    def test_code_cells_with_data_ops(self) -> None:
+        """Should have code cells for data loading, filtering, etc."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        code_cells = [c for c in ir.cells if c.cell_type == CellType.CODE]
+        code_names = [c.name for c in code_cells]
+        assert "df" in code_names
+        assert "filtered" in code_names
+
+    def test_filter_cell_dependencies(self) -> None:
+        """Filtered cell depends on df, pl, type_1_filter, type_2_filter."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        filtered = next(c for c in ir.cells if c.name == "filtered")
+        assert "df" in filtered.inputs
+        assert "pl" in filtered.inputs
+        assert "type_1_filter" in filtered.inputs
+        assert "type_2_filter" in filtered.inputs
+
+    def test_ui_widget_cells(self) -> None:
+        """Should detect mo.ui.table as UI cell."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        ui_cells = [c for c in ir.cells if c.cell_type == CellType.UI]
+        assert len(ui_cells) == 1
+
+    def test_markdown_cells(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        md_cells = [c for c in ir.cells if c.cell_type == CellType.MARKDOWN]
+        assert len(md_cells) == 2
+
+    def test_chart_cell_depends_on_filtered(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/polars_example.py").read_text()
+        ir = parse_marimo(source)
+        chart_cell = next(c for c in ir.cells if c.name == "chart")
+        assert "filtered" in chart_cell.inputs
+        assert "alt" in chart_cell.inputs
+
+
+class TestParseMarimoTier3Ibis:
+    """Tests for parse_marimo with ibis_example.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        assert len(ir.cells) == 6
+
+    def test_imports_extracted(self) -> None:
+        """ibis and altair imports should be extracted."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        modules = [imp.module for imp in ir.imports]
+        assert "ibis" in modules
+        assert "altair" in modules
+
+    def test_code_cell_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        code_cells = [c for c in ir.cells if c.cell_type == CellType.CODE]
+        names = [c.name for c in code_cells]
+        assert "df" in names
+        assert "filtered" in names
+        assert "chart" in names
+
+    def test_df_cell_depends_on_ibis(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        df_cell = next(c for c in ir.cells if c.name == "df")
+        assert "ibis" in df_cell.inputs
+
+    def test_filter_depends_on_ui_outputs(self) -> None:
+        """Filtered cell depends on type_1_filter and type_2_filter."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        filtered = next(c for c in ir.cells if c.name == "filtered")
+        assert "df" in filtered.inputs
+        assert "type_1_filter" in filtered.inputs
+        assert "type_2_filter" in filtered.inputs
+
+    def test_chart_cell_has_multiple_outputs(self) -> None:
+        """Chart cell returns both chart and filtered_df."""
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        chart_cell = next(c for c in ir.cells if c.name == "chart")
+        assert "chart" in chart_cell.outputs
+        assert "filtered_df" in chart_cell.outputs
+
+    def test_has_ui_cell(self) -> None:
+        source = EXAMPLES_DIR.joinpath("marimo/tier3/ibis_example.py").read_text()
+        ir = parse_marimo(source)
+        ui_cells = [c for c in ir.cells if c.cell_type == CellType.UI]
+        assert len(ui_cells) == 1

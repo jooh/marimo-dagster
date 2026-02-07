@@ -675,3 +675,497 @@ class TestGenerateDagsterEdgeCases:
         )
         result = generate_dagster(ir)
         assert "return" not in result.split("def side_effect")[1]
+
+
+class TestParseDagsterTier2Definitions:
+    """Tests for parse_dagster with assets_with_definitions.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_definitions.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 3
+
+    def test_asset_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_definitions.py").read_text()
+        ir = parse_dagster(source)
+        names = [c.name for c in ir.cells]
+        assert names == ["users", "products", "user_product_summary"]
+
+    def test_fan_in_dependencies(self) -> None:
+        """user_product_summary depends on both users and products."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_definitions.py").read_text()
+        ir = parse_dagster(source)
+        summary = ir.cells[2]
+        assert set(summary.inputs) == {"users", "products"}
+
+    def test_root_assets_have_no_inputs(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_definitions.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[0].inputs == []
+        assert ir.cells[1].inputs == []
+
+    def test_definitions_block_ignored(self) -> None:
+        """The dg.Definitions(...) call should not produce cells or imports."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_definitions.py").read_text()
+        ir = parse_dagster(source)
+        # Only asset functions become cells
+        assert len(ir.cells) == 3
+        assert all(c.cell_type == CellType.CODE for c in ir.cells)
+
+
+class TestParseDagsterTier2Resources:
+    """Tests for parse_dagster with assets_with_resources.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 2
+
+    def test_asset_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        names = [c.name for c in ir.cells]
+        assert names == ["raw_events", "event_counts"]
+
+    def test_resource_class_ignored(self) -> None:
+        """ConfigurableResource class definition should not produce a cell."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        cell_names = [c.name for c in ir.cells]
+        assert "DatabaseResource" not in cell_names
+
+    def test_resource_param_filtered(self) -> None:
+        """Resource params should be filtered from inputs.
+
+        The `database: DatabaseResource` parameter is a dagster resource,
+        not a data dependency. It should not appear in inputs.
+        """
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        assert "database" not in ir.cells[0].inputs
+        assert "database" not in ir.cells[1].inputs
+
+    def test_resource_body_calls_stripped(self) -> None:
+        """Bare calls and discarded assignments to resource vars are stripped."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        # raw_events: `_ = database.query(...)` should be stripped
+        body0 = "\n".join(ast.unparse(s) for s in ir.cells[0].body_stmts)
+        assert "database.query" not in body0
+        # event_counts: `database.execute(...)` should be stripped
+        body1 = "\n".join(ast.unparse(s) for s in ir.cells[1].body_stmts)
+        assert "database.execute" not in body1
+
+    def test_data_dependency_preserved(self) -> None:
+        """event_counts depends on raw_events (a real data dependency)."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        assert "raw_events" in ir.cells[1].inputs
+
+    def test_from_dagster_import_excluded(self) -> None:
+        """The `from dagster import ConfigurableResource` should be excluded."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_resources.py").read_text()
+        ir = parse_dagster(source)
+        modules = [imp.module for imp in ir.imports]
+        assert "dagster" not in modules
+
+
+class TestParseDagsterTier2JobsSchedules:
+    """Tests for parse_dagster with assets_with_jobs_schedules.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_jobs_schedules.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 3
+
+    def test_asset_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_jobs_schedules.py").read_text()
+        ir = parse_dagster(source)
+        names = [c.name for c in ir.cells]
+        assert names == ["daily_sales", "daily_inventory", "weekly_report"]
+
+    def test_fan_in_dependency(self) -> None:
+        """weekly_report depends on both daily_sales and daily_inventory."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_jobs_schedules.py").read_text()
+        ir = parse_dagster(source)
+        assert set(ir.cells[2].inputs) == {"daily_sales", "daily_inventory"}
+
+    def test_jobs_schedules_ignored(self) -> None:
+        """Jobs, schedules, and AssetSelection should not produce cells."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier2/assets_with_jobs_schedules.py").read_text()
+        ir = parse_dagster(source)
+        cell_names = [c.name for c in ir.cells]
+        assert "daily_update_job" not in cell_names
+        assert "weekly_update_job" not in cell_names
+        assert "daily_schedule" not in cell_names
+        assert "weekly_schedule" not in cell_names
+
+
+class TestParseDagsterTier3Diamond:
+    """Tests for parse_dagster with diamond_dependency.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/diamond_dependency.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 4
+
+    def test_asset_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/diamond_dependency.py").read_text()
+        ir = parse_dagster(source)
+        names = [c.name for c in ir.cells]
+        assert names == ["source", "left_branch", "right_branch", "merged"]
+
+    def test_diamond_fan_out(self) -> None:
+        """Both left_branch and right_branch depend on source."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/diamond_dependency.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[1].inputs == ["source"]
+        assert ir.cells[2].inputs == ["source"]
+
+    def test_diamond_fan_in(self) -> None:
+        """merged depends on both left_branch and right_branch."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/diamond_dependency.py").read_text()
+        ir = parse_dagster(source)
+        assert set(ir.cells[3].inputs) == {"left_branch", "right_branch"}
+
+    def test_root_has_no_inputs(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/diamond_dependency.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[0].inputs == []
+
+    def test_definitions_block_ignored(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/diamond_dependency.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 4
+
+
+class TestParseDagsterTier3GroupsMetadata:
+    """Tests for parse_dagster with groups_and_metadata.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 3
+
+    def test_asset_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        names = [c.name for c in ir.cells]
+        assert names == ["api_data", "transformed_data", "summary_stats"]
+
+    def test_context_param_filtered(self) -> None:
+        """context: dg.AssetExecutionContext should be filtered from all assets."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        for cell in ir.cells:
+            assert "context" not in cell.inputs
+
+    def test_data_dependency_chain(self) -> None:
+        """api_data -> transformed_data -> summary_stats."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[0].inputs == []
+        assert ir.cells[1].inputs == ["api_data"]
+        assert ir.cells[2].inputs == ["transformed_data"]
+
+    def test_non_dagster_import_preserved(self) -> None:
+        """pandas import should be preserved."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        modules = [imp.module for imp in ir.imports]
+        assert "pandas" in modules
+
+    def test_pandas_alias_preserved(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        pd_import = next(i for i in ir.imports if i.module == "pandas")
+        assert pd_import.alias == "pd"
+
+    def test_decorator_kwargs_preserved(self) -> None:
+        """group_name, compute_kind, description should be in decorator_kwargs."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        # api_data: group_name="ingestion", compute_kind="API"
+        assert ir.cells[0].decorator_kwargs["group_name"] == "ingestion"
+        assert ir.cells[0].decorator_kwargs["compute_kind"] == "API"
+        # summary_stats: group_name="reporting", compute_kind="Analysis", description=...
+        assert ir.cells[2].decorator_kwargs["group_name"] == "reporting"
+        assert ir.cells[2].decorator_kwargs["compute_kind"] == "Analysis"
+        assert "summary statistics" in ir.cells[2].decorator_kwargs["description"]
+
+    def test_context_body_calls_stripped(self) -> None:
+        """context.add_output_metadata() and context.log.info() should be stripped."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        for cell in ir.cells:
+            body = "\n".join(ast.unparse(s) for s in cell.body_stmts)
+            assert "context.add_output_metadata" not in body
+            assert "context.log.info" not in body
+
+    def test_docstrings_preserved(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/groups_and_metadata.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring is not None
+        assert "API" in ir.cells[0].docstring
+
+
+class TestParseDagsterTier3Partitions:
+    """Tests for parse_dagster with partitioned_assets.py."""
+
+    def test_cell_count(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 3
+
+    def test_asset_names(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        names = [c.name for c in ir.cells]
+        assert names == ["monthly_sales_data", "weekly_metrics", "monthly_sales_report"]
+
+    def test_context_param_filtered(self) -> None:
+        """All three assets take context — it should be filtered."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        for cell in ir.cells:
+            assert "context" not in cell.inputs
+
+    def test_data_dependency(self) -> None:
+        """monthly_sales_report depends on monthly_sales_data."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[2].inputs == ["monthly_sales_data"]
+
+    def test_independent_partitioned_assets(self) -> None:
+        """monthly_sales_data and weekly_metrics are independent roots."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        assert ir.cells[0].inputs == []
+        assert ir.cells[1].inputs == []
+
+    def test_partition_defs_ignored(self) -> None:
+        """MonthlyPartitionsDefinition etc. should not produce cells."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        cell_names = [c.name for c in ir.cells]
+        assert "monthly_partition" not in cell_names
+        assert "weekly_partition" not in cell_names
+
+    def test_context_body_calls_stripped(self) -> None:
+        """context.log.info() calls should be stripped from body."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/partitioned_assets.py").read_text()
+        ir = parse_dagster(source)
+        for cell in ir.cells:
+            body = "\n".join(ast.unparse(s) for s in cell.body_stmts)
+            assert "context.log.info" not in body
+
+
+class TestParseDagsterTier3Sensor:
+    """Tests for parse_dagster with assets_with_sensor.py."""
+
+    def test_only_asset_extracted(self) -> None:
+        """Only adhoc_request is an @dg.asset; the sensor function is not."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/assets_with_sensor.py").read_text()
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].name == "adhoc_request"
+
+    def test_sensor_function_ignored(self) -> None:
+        """@dg.sensor decorated function should not be treated as an asset."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/assets_with_sensor.py").read_text()
+        ir = parse_dagster(source)
+        cell_names = [c.name for c in ir.cells]
+        assert "adhoc_request_sensor" not in cell_names
+
+    def test_non_dagster_imports_preserved(self) -> None:
+        """json and os imports should be preserved."""
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/assets_with_sensor.py").read_text()
+        ir = parse_dagster(source)
+        modules = [imp.module for imp in ir.imports]
+        assert "json" in modules
+        assert "os" in modules
+
+    def test_job_definition_ignored(self) -> None:
+        source = EXAMPLES_DIR.joinpath("dagster/tier3/assets_with_sensor.py").read_text()
+        ir = parse_dagster(source)
+        cell_names = [c.name for c in ir.cells]
+        assert "adhoc_request_job" not in cell_names
+
+
+class TestDecoratorDescription:
+    """Tests for extracting @dg.asset(description=...) as docstring."""
+
+    def test_description_used_when_no_docstring(self) -> None:
+        """description= kwarg should become docstring if function has none."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset(description="Loads raw data from source.")\n'
+            'def raw_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring == "Loads raw data from source."
+
+    def test_existing_docstring_takes_precedence(self) -> None:
+        """If function has a docstring, description= should NOT overwrite it."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset(description="Decorator description.")\n'
+            'def raw_data() -> dict:\n'
+            '    """Function docstring."""\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring == "Function docstring."
+        # description still in decorator_kwargs
+        assert ir.cells[0].decorator_kwargs["description"] == "Decorator description."
+
+
+class TestGenerateDagsterDecoratorKwargs:
+    """Tests for generating @dg.asset(...) with keyword arguments."""
+
+    def test_kwargs_emitted_in_decorator(self) -> None:
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="x",
+                    body_stmts=ast.parse("x = 1").body,
+                    inputs=[],
+                    outputs=["x"],
+                    decorator_kwargs={"group_name": "ingestion", "compute_kind": "API"},
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert 'group_name="ingestion"' in result
+        assert 'compute_kind="API"' in result
+
+    def test_no_kwargs_plain_decorator(self) -> None:
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="x",
+                    body_stmts=ast.parse("x = 1").body,
+                    inputs=[],
+                    outputs=["x"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "@dg.asset\n" in result
+
+
+class TestResourceParamAttributeForm:
+    """Tests for resource classes using dg.ConfigurableResource attribute form."""
+
+    def test_resource_via_dg_attribute(self) -> None:
+        """class Foo(dg.ConfigurableResource) should be detected as resource."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            'class MyResource(dg.ConfigurableResource):\n'
+            '    url: str\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data(resource: MyResource) -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert "resource" not in ir.cells[0].inputs
+
+    def test_non_dagster_resource_attribute_not_detected(self) -> None:
+        """class Foo(other.ConfigurableResource) should NOT be treated as resource."""
+        source = (
+            'import dagster as dg\n'
+            'import other\n'
+            '\n'
+            'class MyResource(other.ConfigurableResource):\n'
+            '    url: str\n'
+            '\n'
+            '@dg.asset\n'
+            'def my_data(resource: MyResource) -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        # MyResource is NOT from dagster, so resource param is kept as input
+        assert "resource" in ir.cells[0].inputs
+
+    def test_call_chain_root_non_name(self) -> None:
+        """_call_chain_root should return None for non-Name roots."""
+        from marimo_dagster._dagster_ast import _call_chain_root
+
+        # func()[0].method() — root is a Call, not a Name
+        node = ast.parse("func()[0].method()").body[0].value.func  # type: ignore[union-attr]
+        assert _call_chain_root(node) is None
+
+
+class TestDecoratorKwargsOnlyFromAsset:
+    """Tests that _extract_decorator_kwargs only reads from @dg.asset decorators."""
+
+    def test_non_asset_decorator_kwargs_ignored(self) -> None:
+        """A non-asset decorator's kwargs should not be extracted."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@my_wrapper(description="not an asset description")\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        # description from @my_wrapper should NOT be treated as asset metadata
+        assert ir.cells[0].decorator_kwargs == {}
+
+    def test_asset_decorator_kwargs_still_extracted(self) -> None:
+        """@dg.asset(group_name=...) kwargs should still be extracted."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@my_wrapper(description="wrapper desc")\n'
+            '@dg.asset(group_name="ingestion")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].decorator_kwargs == {"group_name": "ingestion"}
+
+    def test_non_asset_description_not_used_as_docstring(self) -> None:
+        """description from a non-asset decorator should not become docstring."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@my_wrapper(description="wrapper desc")\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring is None
+
+    def test_attribute_call_non_asset_ignored(self) -> None:
+        """@other.decorator(key="val") should not be extracted as asset kwargs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@other.decorator(key="val")\n'
+            '@dg.asset(group_name="data")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].decorator_kwargs == {"group_name": "data"}
+
+    def test_non_dagster_module_asset_call_ignored(self) -> None:
+        """@other.asset(key="val") should not be extracted as asset kwargs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@other.asset(key="val")\n'
+            '@dg.asset(compute_kind="SQL")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].decorator_kwargs == {"compute_kind": "SQL"}

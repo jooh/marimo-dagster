@@ -6,6 +6,7 @@ from marimo_dagster._ir import CellNode, CellType, ImportItem, NotebookIR
 from marimo_dagster._metadata import generate_pep723_metadata, parse_pep723_metadata
 
 _DAGSTER_MODULES = {"dagster"}
+_DAGSTER_RESOURCE_BASES = {"ConfigurableResource", "ConfigurableIOManager"}
 
 
 def parse_dagster(source: str) -> NotebookIR:
@@ -19,6 +20,10 @@ def parse_dagster(source: str) -> NotebookIR:
     # Track local names that resolve to dagster's `asset` decorator
     # (e.g., `from dagster import asset` or `from dagster import asset as my_asset`)
     asset_names: set[str] = set()
+    # Track resource base class names imported from dagster
+    resource_bases: set[str] = set()
+    # Track locally-defined resource class names
+    resource_types: set[str] = set()
 
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -34,13 +39,27 @@ def parse_dagster(source: str) -> NotebookIR:
                 for alias in node.names:
                     if alias.name == "asset":
                         asset_names.add(alias.asname or alias.name)
+                    if alias.name in _DAGSTER_RESOURCE_BASES:
+                        resource_bases.add(alias.asname or alias.name)
             elif node.module:
                 names = [(a.name, a.asname) for a in node.names]
                 imports.append(ImportItem(module=node.module, names=names))
+        elif isinstance(node, ast.ClassDef):
+            # Track classes inheriting from dagster resource bases
+            for base in node.bases:
+                if isinstance(base, ast.Name) and base.id in resource_bases:
+                    resource_types.add(node.name)
+                if isinstance(base, ast.Attribute) and base.attr in _DAGSTER_RESOURCE_BASES:
+                    if isinstance(base.value, ast.Name) and base.value.id in ("dg", "dagster"):
+                        resource_types.add(node.name)
         elif isinstance(node, ast.FunctionDef) and _is_dagster_asset(
             node, asset_names=asset_names
         ):
-            cells.append(_parse_asset_function(node))
+            cells.append(
+                _parse_asset_function(
+                    node, resource_types=resource_types, asset_names=asset_names
+                )
+            )
 
     return NotebookIR(
         imports=imports,
@@ -94,7 +113,11 @@ def _generate_asset_function(cell: CellNode) -> str:
     lines: list[str] = []
 
     # Decorator
-    lines.append("@dg.asset")
+    if cell.decorator_kwargs:
+        kwargs_parts = [f'{k}="{v}"' for k, v in cell.decorator_kwargs.items()]
+        lines.append(f"@dg.asset({', '.join(kwargs_parts)})")
+    else:
+        lines.append("@dg.asset")
 
     # Function signature
     params = ", ".join(cell.inputs)
@@ -148,23 +171,43 @@ def _is_dagster_asset(
     return False
 
 
-def _parse_asset_function(node: ast.FunctionDef) -> CellNode:
+def _parse_asset_function(
+    node: ast.FunctionDef,
+    *,
+    resource_types: set[str] | None = None,
+    asset_names: set[str] | None = None,
+) -> CellNode:
     """Extract a CellNode from a dagster asset function definition."""
     name = node.name
     docstring = ast.get_docstring(node)
 
-    # Extract inputs (parameter names), filtering framework params
-    inputs = [
-        arg.arg
-        for arg in node.args.args
-        if not _is_framework_param(arg)
-    ]
+    _resource_types = resource_types or set()
+
+    # Extract inputs and track stripped (framework/resource) param names
+    inputs: list[str] = []
+    stripped_params: set[str] = set()
+    for arg in node.args.args:
+        if _is_framework_param(arg, resource_types=_resource_types):
+            stripped_params.add(arg.arg)
+        else:
+            inputs.append(arg.arg)
 
     # Extract return type annotation
     return_type = ast.unparse(node.returns) if node.returns else None
 
+    # Extract decorator kwargs (string-literal values only)
+    decorator_kwargs = _extract_decorator_kwargs(node, asset_names=asset_names)
+
+    # Use description as docstring if function has no docstring
+    if not docstring and "description" in decorator_kwargs:
+        docstring = decorator_kwargs["description"]
+
     # Build body: strip docstring and final return, transform return to assignment
-    body_stmts = _transform_body(node, name, has_docstring=docstring is not None)
+    body_stmts = _transform_body(node, name, has_docstring=ast.get_docstring(node) is not None)
+
+    # Strip calls to stripped params (context.log.info, database.execute, etc.)
+    if stripped_params:
+        body_stmts = _strip_framework_calls(body_stmts, stripped_params)
 
     return CellNode(
         name=name,
@@ -174,16 +217,101 @@ def _parse_asset_function(node: ast.FunctionDef) -> CellNode:
         cell_type=CellType.CODE,
         docstring=docstring,
         return_type_annotation=return_type,
+        decorator_kwargs=decorator_kwargs,
     )
 
 
-def _is_framework_param(arg: ast.arg) -> bool:
-    """Check if a function parameter is a dagster framework param (e.g. context)."""
+def _is_framework_param(
+    arg: ast.arg, *, resource_types: set[str] | None = None
+) -> bool:
+    """Check if a function parameter is a dagster framework param.
+
+    Matches AssetExecutionContext and any locally-defined resource types.
+    """
     if arg.annotation:
         ann = ast.unparse(arg.annotation)
         if "AssetExecutionContext" in ann:
             return True
+        if resource_types:
+            for rt in resource_types:
+                if rt in ann:
+                    return True
     return False
+
+
+def _extract_decorator_kwargs(
+    node: ast.FunctionDef, *, asset_names: set[str] | None = None
+) -> dict[str, str]:
+    """Extract string-literal keyword arguments from the @dg.asset(...) decorator.
+
+    Only extracts from decorators that are identified as dagster asset decorators,
+    ignoring kwargs from other decorators.
+    """
+    _asset_names = asset_names or set()
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        if not _is_asset_decorator_call(dec, asset_names=_asset_names):
+            continue
+        kwargs: dict[str, str] = {}
+        for kw in dec.keywords:
+            if kw.arg and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                kwargs[kw.arg] = kw.value.value
+        return kwargs
+    return {}
+
+
+def _is_asset_decorator_call(dec: ast.Call, *, asset_names: set[str] | None = None) -> bool:
+    """Check if a Call decorator node is a dagster asset decorator call."""
+    _asset_names = asset_names or set()
+    # @dg.asset(...) / @dagster.asset(...)
+    if isinstance(dec.func, ast.Attribute):
+        if dec.func.attr == "asset" and isinstance(dec.func.value, ast.Name):
+            if dec.func.value.id in ("dg", "dagster"):
+                return True
+    # @asset(...) (bare call from `from dagster import asset`)
+    if isinstance(dec.func, ast.Name) and dec.func.id in _asset_names:
+        return True
+    return False
+
+
+def _call_chain_root(node: ast.expr) -> str | None:
+    """Get the root variable name of an attribute/call chain (e.g. context.log.info → 'context')."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _strip_framework_calls(
+    stmts: list[ast.stmt], stripped_names: set[str]
+) -> list[ast.stmt]:
+    """Remove statements that are calls on stripped framework variables.
+
+    Strips:
+    - Bare expression calls: ``context.log.info(...)``, ``database.execute(...)``
+    - Discarded assignments: ``_ = database.query(...)``
+    """
+    result: list[ast.stmt] = []
+    for stmt in stmts:
+        # Bare expression call: context.log.info(...)
+        if (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Call)
+            and _call_chain_root(stmt.value.func) in stripped_names
+        ):
+            continue
+        # Discarded assignment: _ = database.query(...)
+        if (
+            isinstance(stmt, ast.Assign)
+            and all(isinstance(t, ast.Name) and t.id == "_" for t in stmt.targets)
+            and isinstance(stmt.value, ast.Call)
+            and _call_chain_root(stmt.value.func) in stripped_names
+        ):
+            continue
+        result.append(stmt)
+    return result
 
 
 def _transform_body(
