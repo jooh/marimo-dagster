@@ -56,7 +56,9 @@ def parse_dagster(source: str) -> NotebookIR:
             node, asset_names=asset_names
         ):
             cells.append(
-                _parse_asset_function(node, resource_types=resource_types)
+                _parse_asset_function(
+                    node, resource_types=resource_types, asset_names=asset_names
+                )
             )
 
     return NotebookIR(
@@ -170,7 +172,10 @@ def _is_dagster_asset(
 
 
 def _parse_asset_function(
-    node: ast.FunctionDef, *, resource_types: set[str] | None = None
+    node: ast.FunctionDef,
+    *,
+    resource_types: set[str] | None = None,
+    asset_names: set[str] | None = None,
 ) -> CellNode:
     """Extract a CellNode from a dagster asset function definition."""
     name = node.name
@@ -191,7 +196,7 @@ def _parse_asset_function(
     return_type = ast.unparse(node.returns) if node.returns else None
 
     # Extract decorator kwargs (string-literal values only)
-    decorator_kwargs = _extract_decorator_kwargs(node)
+    decorator_kwargs = _extract_decorator_kwargs(node, asset_names=asset_names)
 
     # Use description as docstring if function has no docstring
     if not docstring and "description" in decorator_kwargs:
@@ -234,18 +239,40 @@ def _is_framework_param(
     return False
 
 
-def _extract_decorator_kwargs(node: ast.FunctionDef) -> dict[str, str]:
-    """Extract string-literal keyword arguments from the @dg.asset(...) decorator."""
+def _extract_decorator_kwargs(
+    node: ast.FunctionDef, *, asset_names: set[str] | None = None
+) -> dict[str, str]:
+    """Extract string-literal keyword arguments from the @dg.asset(...) decorator.
+
+    Only extracts from decorators that are identified as dagster asset decorators,
+    ignoring kwargs from other decorators.
+    """
+    _asset_names = asset_names or set()
     for dec in node.decorator_list:
         if not isinstance(dec, ast.Call):
+            continue
+        if not _is_asset_decorator_call(dec, asset_names=_asset_names):
             continue
         kwargs: dict[str, str] = {}
         for kw in dec.keywords:
             if kw.arg and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
                 kwargs[kw.arg] = kw.value.value
-        if kwargs:
-            return kwargs
+        return kwargs
     return {}
+
+
+def _is_asset_decorator_call(dec: ast.Call, *, asset_names: set[str] | None = None) -> bool:
+    """Check if a Call decorator node is a dagster asset decorator call."""
+    _asset_names = asset_names or set()
+    # @dg.asset(...) / @dagster.asset(...)
+    if isinstance(dec.func, ast.Attribute):
+        if dec.func.attr == "asset" and isinstance(dec.func.value, ast.Name):
+            if dec.func.value.id in ("dg", "dagster"):
+                return True
+    # @asset(...) (bare call from `from dagster import asset`)
+    if isinstance(dec.func, ast.Name) and dec.func.id in _asset_names:
+        return True
+    return False
 
 
 def _call_chain_root(node: ast.expr) -> str | None:

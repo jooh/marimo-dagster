@@ -347,6 +347,29 @@ class TestSqlCellConversion:
         # Should have duckdb import only once (from the original, not duplicated)
         assert result.count("import duckdb") == 1
 
+    def test_aliased_duckdb_import_gets_unaliased_import(self) -> None:
+        """If duckdb is imported with alias, an unaliased import must also exist."""
+        source = (
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    import duckdb as db\n'
+            '    return (db,)\n'
+            '@app.cell\n'
+            'def _(mo):\n'
+            '    result = mo.sql(f"SELECT 1")\n'
+            '    return (result,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        ast.parse(result)
+        assert "duckdb.sql" in result
+        # The rewritten code uses `duckdb.sql(...)` so an unaliased import
+        # must be present (not just `import duckdb as db`).
+        assert "import duckdb\n" in result
+
     def test_non_mo_sql_calls_not_rewritten(self) -> None:
         """Other function calls in SQL cells should not be rewritten."""
         source = (

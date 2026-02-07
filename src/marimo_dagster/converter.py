@@ -51,8 +51,14 @@ def _convert_sql_cells(ir: NotebookIR) -> None:
     if not has_sql:
         return
 
-    # Add duckdb import if not already present
-    if not any(imp.module == "duckdb" for imp in ir.imports):
+    # Add unaliased duckdb import if not already present.
+    # An aliased import (e.g., `import duckdb as db`) doesn't make `duckdb`
+    # available as a bare name, so we need an unaliased import for duckdb.sql().
+    has_unaliased_duckdb = any(
+        imp.module == "duckdb" and imp.alias is None and imp.names is None
+        for imp in ir.imports
+    )
+    if not has_unaliased_duckdb:
         ir.imports.append(ImportItem(module="duckdb"))
 
     for cell in ir.cells:

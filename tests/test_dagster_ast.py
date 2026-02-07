@@ -1099,3 +1099,73 @@ class TestResourceParamAttributeForm:
         # func()[0].method() — root is a Call, not a Name
         node = ast.parse("func()[0].method()").body[0].value.func  # type: ignore[union-attr]
         assert _call_chain_root(node) is None
+
+
+class TestDecoratorKwargsOnlyFromAsset:
+    """Tests that _extract_decorator_kwargs only reads from @dg.asset decorators."""
+
+    def test_non_asset_decorator_kwargs_ignored(self) -> None:
+        """A non-asset decorator's kwargs should not be extracted."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@my_wrapper(description="not an asset description")\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        # description from @my_wrapper should NOT be treated as asset metadata
+        assert ir.cells[0].decorator_kwargs == {}
+
+    def test_asset_decorator_kwargs_still_extracted(self) -> None:
+        """@dg.asset(group_name=...) kwargs should still be extracted."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@my_wrapper(description="wrapper desc")\n'
+            '@dg.asset(group_name="ingestion")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].decorator_kwargs == {"group_name": "ingestion"}
+
+    def test_non_asset_description_not_used_as_docstring(self) -> None:
+        """description from a non-asset decorator should not become docstring."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@my_wrapper(description="wrapper desc")\n'
+            '@dg.asset\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring is None
+
+    def test_attribute_call_non_asset_ignored(self) -> None:
+        """@other.decorator(key="val") should not be extracted as asset kwargs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@other.decorator(key="val")\n'
+            '@dg.asset(group_name="data")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].decorator_kwargs == {"group_name": "data"}
+
+    def test_non_dagster_module_asset_call_ignored(self) -> None:
+        """@other.asset(key="val") should not be extracted as asset kwargs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@other.asset(key="val")\n'
+            '@dg.asset(compute_kind="SQL")\n'
+            'def my_data() -> dict:\n'
+            '    return {"x": 1}\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].decorator_kwargs == {"compute_kind": "SQL"}
