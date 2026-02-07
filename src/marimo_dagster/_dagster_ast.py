@@ -52,6 +52,12 @@ def parse_dagster(source: str) -> NotebookIR:
                 if isinstance(base, ast.Attribute) and base.attr in _DAGSTER_RESOURCE_BASES:
                     if isinstance(base.value, ast.Name) and base.value.id in ("dg", "dagster"):
                         resource_types.add(node.name)
+        elif isinstance(node, ast.FunctionDef) and _is_dagster_multi_asset(node):
+            cells.append(
+                _parse_multi_asset_function(
+                    node, resource_types=resource_types
+                )
+            )
         elif isinstance(node, ast.FunctionDef) and _is_dagster_asset(
             node, asset_names=asset_names
         ):
@@ -98,7 +104,10 @@ def generate_dagster(ir: NotebookIR) -> str:
 
 
 def _generate_asset_function(cell: CellNode) -> str:
-    """Generate a single @dg.asset function from a CellNode."""
+    """Generate a single @dg.asset or @dg.multi_asset function from a CellNode."""
+    if len(cell.outputs) > 1:
+        return _generate_multi_asset_function(cell)
+
     lines: list[str] = []
 
     # Decorator
@@ -127,6 +136,45 @@ def _generate_asset_function(cell: CellNode) -> str:
     # Convert it to a return statement
     if cell.outputs:
         lines.append(f"    return {cell.outputs[0]}")
+
+    return "\n".join(lines)
+
+
+def _generate_multi_asset_function(cell: CellNode) -> str:
+    """Generate a @dg.multi_asset function from a CellNode with multiple outputs."""
+    lines: list[str] = []
+
+    # Build decorator kwargs
+    kwargs_parts: list[str] = []
+
+    # outs dict
+    outs_entries = [f'        "{name}": dg.AssetOut()' for name in cell.outputs]
+    outs_str = "{\n" + ",\n".join(outs_entries) + ",\n    }"
+    kwargs_parts.append(f"outs={outs_str}")
+
+    # Additional decorator kwargs
+    for k, v in cell.decorator_kwargs.items():
+        kwargs_parts.append(f'{k}="{v}"')
+
+    decorator_args = ",\n    ".join(kwargs_parts)
+    lines.append(f"@dg.multi_asset(\n    {decorator_args},\n)")
+
+    # Function signature
+    params = ", ".join(cell.inputs)
+    lines.append(f"def {cell.name}({params}):")
+
+    # Docstring
+    if cell.docstring:
+        lines.append(f'    """{cell.docstring}"""')
+
+    # Body statements
+    for stmt in cell.body_stmts:
+        stmt_text = ast.unparse(stmt)
+        for line in stmt_text.splitlines():
+            lines.append(f"    {line}")
+
+    # Return all outputs as tuple
+    lines.append(f"    return {', '.join(cell.outputs)}")
 
     return "\n".join(lines)
 
@@ -203,6 +251,106 @@ def _parse_asset_function(
         return_type_annotation=return_type,
         decorator_kwargs=decorator_kwargs,
     )
+
+
+def _is_dagster_multi_asset(node: ast.FunctionDef) -> bool:
+    """Check if a function is decorated with @dg.multi_asset(...) or @dagster.multi_asset(...)."""
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        func = dec.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "multi_asset"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in ("dg", "dagster")
+        ):
+            return True
+    return False
+
+
+def _parse_multi_asset_function(
+    node: ast.FunctionDef,
+    *,
+    resource_types: set[str] | None = None,
+) -> CellNode:
+    """Extract a CellNode from a dagster multi_asset function definition."""
+    name = node.name
+    docstring = ast.get_docstring(node)
+
+    _resource_types = resource_types or set()
+
+    # Extract inputs, filtering framework/resource params
+    inputs: list[str] = []
+    stripped_params: set[str] = set()
+    for arg in node.args.args:
+        if _is_framework_param(arg, resource_types=_resource_types):
+            stripped_params.add(arg.arg)
+        else:
+            inputs.append(arg.arg)
+
+    # Extract outputs from outs={...} in decorator
+    outputs = _extract_multi_asset_outs(node)
+
+    # Build body: strip docstring and final return (no assignment transform)
+    body_stmts = _strip_body(node, has_docstring=docstring is not None)
+
+    # Strip calls to stripped params
+    if stripped_params:
+        body_stmts = _strip_framework_calls(body_stmts, stripped_params)
+
+    return CellNode(
+        name=name,
+        body_stmts=body_stmts,
+        inputs=inputs,
+        outputs=outputs,
+        cell_type=CellType.CODE,
+        docstring=docstring,
+    )
+
+
+def _extract_multi_asset_outs(node: ast.FunctionDef) -> list[str]:
+    """Extract output names from the outs={...} kwarg of @dg.multi_asset(...)."""
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        func = dec.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "multi_asset"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in ("dg", "dagster")
+        ):
+            continue
+        for kw in dec.keywords:
+            if kw.arg == "outs" and isinstance(kw.value, ast.Dict):
+                names: list[str] = []
+                for key in kw.value.keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        names.append(key.value)
+                return names
+    return []
+
+
+def _strip_body(
+    node: ast.FunctionDef, *, has_docstring: bool
+) -> list[ast.stmt]:
+    """Strip docstring and final return from a function body."""
+    stmts = list(node.body)
+
+    # Strip docstring
+    if has_docstring and stmts:
+        stmts = stmts[1:]
+
+    if not stmts:
+        return stmts
+
+    # Strip final return (don't transform to assignment for multi_asset)
+    last = stmts[-1]
+    if isinstance(last, ast.Return):
+        stmts = stmts[:-1]
+
+    return stmts
 
 
 def _is_framework_param(

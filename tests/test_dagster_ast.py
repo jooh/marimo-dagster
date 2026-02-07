@@ -378,7 +378,8 @@ class TestGenerateDagsterFromMarimoExamples:
         result = generate_dagster(ir)
         ast.parse(result)
         assert "import dagster as dg" in result
-        assert "@dg.asset" in result
+        # Cell returns (df, data) so it becomes a multi_asset
+        assert "@dg.multi_asset" in result
 
     def test_read_csv_produces_valid_dagster(self) -> None:
         from marimo_dagster._marimo_ast import parse_marimo
@@ -1167,3 +1168,486 @@ class TestDecoratorKwargsOnlyFromAsset:
         )
         ir = parse_dagster(source)
         assert ir.cells[0].decorator_kwargs == {"compute_kind": "SQL"}
+
+
+class TestGenerateMultiAsset:
+    """Tests for generating @dg.multi_asset for cells with multiple outputs."""
+
+    def test_multi_output_uses_multi_asset_decorator(self) -> None:
+        """Cells with multiple outputs should use @dg.multi_asset."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nfiltered_df = 2").body,
+                    inputs=[],
+                    outputs=["chart", "filtered_df"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "@dg.multi_asset" in result
+
+    def test_multi_output_has_outs_dict(self) -> None:
+        """multi_asset should declare outs for each output."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nfiltered_df = 2").body,
+                    inputs=[],
+                    outputs=["chart", "filtered_df"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert '"chart": dg.AssetOut()' in result
+        assert '"filtered_df": dg.AssetOut()' in result
+
+    def test_multi_output_returns_tuple(self) -> None:
+        """multi_asset function should return all outputs as a tuple."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nfiltered_df = 2").body,
+                    inputs=[],
+                    outputs=["chart", "filtered_df"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "return chart, filtered_df" in result
+
+    def test_multi_output_valid_python(self) -> None:
+        """Generated multi_asset code should be valid Python."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nfiltered_df = 2").body,
+                    inputs=[],
+                    outputs=["chart", "filtered_df"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        ast.parse(result)
+
+    def test_single_output_still_uses_asset(self) -> None:
+        """Cells with a single output should still use @dg.asset."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="my_data",
+                    body_stmts=ast.parse('my_data = {"x": 1}').body,
+                    inputs=[],
+                    outputs=["my_data"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "@dg.asset\n" in result
+        assert "@dg.multi_asset" not in result
+
+    def test_multi_output_with_inputs(self) -> None:
+        """multi_asset with inputs should list them as function params."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = raw + 1\nstats = raw + 2").body,
+                    inputs=["raw"],
+                    outputs=["chart", "stats"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "def chart(raw):" in result
+
+    def test_multi_output_with_decorator_kwargs(self) -> None:
+        """multi_asset should include decorator_kwargs alongside outs."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nstats = 2").body,
+                    inputs=[],
+                    outputs=["chart", "stats"],
+                    decorator_kwargs={"group_name": "analytics"},
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "@dg.multi_asset" in result
+        assert 'group_name="analytics"' in result
+        assert '"chart": dg.AssetOut()' in result
+
+    def test_multi_output_three_outputs(self) -> None:
+        """multi_asset should handle three or more outputs."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="a",
+                    body_stmts=ast.parse("a = 1\nb = 2\nc = 3").body,
+                    inputs=[],
+                    outputs=["a", "b", "c"],
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "@dg.multi_asset" in result
+        assert '"a": dg.AssetOut()' in result
+        assert '"b": dg.AssetOut()' in result
+        assert '"c": dg.AssetOut()' in result
+        assert "return a, b, c" in result
+
+    def test_multi_output_with_docstring(self) -> None:
+        """multi_asset should include docstring."""
+        ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nstats = 2").body,
+                    inputs=[],
+                    outputs=["chart", "stats"],
+                    docstring="Produce chart and stats.",
+                )
+            ],
+        )
+        result = generate_dagster(ir)
+        assert "Produce chart and stats." in result
+
+
+class TestParseMultiAsset:
+    """Tests for parsing @dg.multi_asset decorated functions."""
+
+    def test_parse_multi_asset_cell_count(self) -> None:
+        """A @dg.multi_asset function should produce one cell."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "chart": dg.AssetOut(),\n'
+            '        "filtered_df": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def chart(raw):\n'
+            '    chart = raw + 1\n'
+            '    filtered_df = raw + 2\n'
+            '    return chart, filtered_df\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+
+    def test_parse_multi_asset_outputs(self) -> None:
+        """Outputs should be extracted from the outs dict keys."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "chart": dg.AssetOut(),\n'
+            '        "filtered_df": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def chart(raw):\n'
+            '    chart = raw + 1\n'
+            '    filtered_df = raw + 2\n'
+            '    return chart, filtered_df\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].outputs == ["chart", "filtered_df"]
+
+    def test_parse_multi_asset_inputs(self) -> None:
+        """Inputs should be extracted from function params."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "chart": dg.AssetOut(),\n'
+            '        "filtered_df": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def chart(raw):\n'
+            '    chart = raw + 1\n'
+            '    filtered_df = raw + 2\n'
+            '    return chart, filtered_df\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].inputs == ["raw"]
+
+    def test_parse_multi_asset_name(self) -> None:
+        """Cell name should be the function name."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "chart": dg.AssetOut(),\n'
+            '        "filtered_df": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def chart(raw):\n'
+            '    chart = raw + 1\n'
+            '    filtered_df = raw + 2\n'
+            '    return chart, filtered_df\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].name == "chart"
+
+    def test_parse_multi_asset_body_no_return(self) -> None:
+        """Return statement should be stripped from body."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        for stmt in ir.cells[0].body_stmts:
+            assert not isinstance(stmt, ast.Return)
+
+    def test_parse_multi_asset_with_context(self) -> None:
+        """context param should be filtered from multi_asset inputs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a(context: dg.AssetExecutionContext, raw):\n'
+            '    a = raw + 1\n'
+            '    b = raw + 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].inputs == ["raw"]
+
+    def test_parse_multi_asset_roundtrip(self) -> None:
+        """Generating then parsing a multi_asset should preserve structure."""
+        original_ir = NotebookIR(
+            cells=[
+                CellNode(
+                    name="chart",
+                    body_stmts=ast.parse("chart = 1\nfiltered_df = 2").body,
+                    inputs=["raw"],
+                    outputs=["chart", "filtered_df"],
+                )
+            ],
+        )
+        dagster_source = generate_dagster(original_ir)
+        parsed_ir = parse_dagster(dagster_source)
+        assert len(parsed_ir.cells) == 1
+        assert parsed_ir.cells[0].name == "chart"
+        assert parsed_ir.cells[0].outputs == ["chart", "filtered_df"]
+        assert parsed_ir.cells[0].inputs == ["raw"]
+
+    def test_parse_multi_asset_with_docstring(self) -> None:
+        """Docstring should be extracted from multi_asset function."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    """Produce a and b."""\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring == "Produce a and b."
+
+    def test_mixed_asset_and_multi_asset(self) -> None:
+        """Both @dg.asset and @dg.multi_asset should be parsed."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.asset\n'
+            'def raw() -> dict:\n'
+            '    return {"x": 1}\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "chart": dg.AssetOut(),\n'
+            '        "stats": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def chart(raw):\n'
+            '    chart = raw["x"] + 1\n'
+            '    stats = raw["x"] + 2\n'
+            '    return chart, stats\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 2
+        assert ir.cells[0].name == "raw"
+        assert ir.cells[0].outputs == ["raw"]
+        assert ir.cells[1].name == "chart"
+        assert ir.cells[1].outputs == ["chart", "stats"]
+
+    def test_parse_multi_asset_with_extra_decorators(self) -> None:
+        """Non-call decorators on multi_asset should be ignored gracefully."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@some_wrapper\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert ir.cells[0].outputs == ["a", "b"]
+
+    def test_parse_multi_asset_with_non_multi_asset_call_decorator(self) -> None:
+        """@other.decorator() alongside @dg.multi_asset should be handled."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@other.decorator(key="val")\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].outputs == ["a", "b"]
+
+    def test_parse_multi_asset_docstring_only_body(self) -> None:
+        """multi_asset with only docstring and return should have empty body."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    """Just docs."""\n'
+            '    return 1, 2\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].docstring == "Just docs."
+        assert ir.cells[0].body_stmts == []
+
+    def test_parse_multi_asset_no_return(self) -> None:
+        """multi_asset body with no return statement should still parse."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    print("side effect")\n'
+        )
+        ir = parse_dagster(source)
+        assert len(ir.cells) == 1
+        assert len(ir.cells[0].body_stmts) == 1
+
+    def test_parse_multi_asset_docstring_only_no_return(self) -> None:
+        """multi_asset with only docstring (no return) should have empty body."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    """Just docs."""\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].body_stmts == []
+
+    def test_parse_multi_asset_without_outs_kwarg(self) -> None:
+        """multi_asset without outs kwarg should produce empty outputs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset()\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    return a\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].outputs == []
+
+    def test_parse_multi_asset_with_extra_kwargs(self) -> None:
+        """multi_asset with group_name alongside outs should parse outs."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            '@dg.multi_asset(\n'
+            '    group_name="analytics",\n'
+            '    outs={\n'
+            '        "a": dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    },\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        assert ir.cells[0].outputs == ["a", "b"]
+
+    def test_parse_multi_asset_non_string_key_in_outs(self) -> None:
+        """Non-string keys in outs dict should be skipped."""
+        source = (
+            'import dagster as dg\n'
+            '\n'
+            'NAME = "dynamic"\n'
+            '@dg.multi_asset(\n'
+            '    outs={\n'
+            '        NAME: dg.AssetOut(),\n'
+            '        "b": dg.AssetOut(),\n'
+            '    }\n'
+            ')\n'
+            'def a():\n'
+            '    a = 1\n'
+            '    b = 2\n'
+            '    return a, b\n'
+        )
+        ir = parse_dagster(source)
+        # Only "b" is extractable; NAME is a variable reference, not a string literal
+        assert ir.cells[0].outputs == ["b"]
