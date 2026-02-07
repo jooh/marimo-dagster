@@ -20,6 +20,8 @@ def parse_dagster(source: str) -> NotebookIR:
     # Track local names that resolve to dagster's `asset` decorator
     # (e.g., `from dagster import asset` or `from dagster import asset as my_asset`)
     asset_names: set[str] = set()
+    # Track local names that resolve to dagster's `multi_asset` decorator
+    multi_asset_names: set[str] = set()
     # Track resource base class names imported from dagster
     resource_bases: set[str] = set()
     # Track locally-defined resource class names
@@ -35,10 +37,12 @@ def parse_dagster(source: str) -> NotebookIR:
                 node.module == m or node.module.startswith(m + ".")
                 for m in _DAGSTER_MODULES
             ):
-                # Collect local names that are aliases for `asset`
+                # Collect local names that are aliases for `asset` / `multi_asset`
                 for alias in node.names:
                     if alias.name == "asset":
                         asset_names.add(alias.asname or alias.name)
+                    if alias.name == "multi_asset":
+                        multi_asset_names.add(alias.asname or alias.name)
                     if alias.name in _DAGSTER_RESOURCE_BASES:
                         resource_bases.add(alias.asname or alias.name)
             elif node.module:
@@ -52,6 +56,16 @@ def parse_dagster(source: str) -> NotebookIR:
                 if isinstance(base, ast.Attribute) and base.attr in _DAGSTER_RESOURCE_BASES:
                     if isinstance(base.value, ast.Name) and base.value.id in ("dg", "dagster"):
                         resource_types.add(node.name)
+        elif isinstance(node, ast.FunctionDef) and _is_dagster_multi_asset(
+            node, multi_asset_names=multi_asset_names
+        ):
+            cells.append(
+                _parse_multi_asset_function(
+                    node,
+                    resource_types=resource_types,
+                    multi_asset_names=multi_asset_names,
+                )
+            )
         elif isinstance(node, ast.FunctionDef) and _is_dagster_asset(
             node, asset_names=asset_names
         ):
@@ -98,7 +112,10 @@ def generate_dagster(ir: NotebookIR) -> str:
 
 
 def _generate_asset_function(cell: CellNode) -> str:
-    """Generate a single @dg.asset function from a CellNode."""
+    """Generate a single @dg.asset or @dg.multi_asset function from a CellNode."""
+    if len(cell.outputs) > 1:
+        return _generate_multi_asset_function(cell)
+
     lines: list[str] = []
 
     # Decorator
@@ -127,6 +144,49 @@ def _generate_asset_function(cell: CellNode) -> str:
     # Convert it to a return statement
     if cell.outputs:
         lines.append(f"    return {cell.outputs[0]}")
+
+    return "\n".join(lines)
+
+
+def _generate_multi_asset_function(cell: CellNode) -> str:
+    """Generate a @dg.multi_asset function from a CellNode with multiple outputs."""
+    assert len(cell.outputs) > 1, (
+        f"_generate_multi_asset_function requires >1 outputs, got {cell.outputs}"
+    )
+    lines: list[str] = []
+
+    # Build decorator kwargs
+    kwargs_parts: list[str] = []
+
+    # outs dict (trailing commas follow Python convention for multi-line dicts)
+    outs_entries = [f'        "{name}": dg.AssetOut()' for name in cell.outputs]
+    outs_str = "{\n" + ",\n".join(outs_entries) + ",\n    }"
+    kwargs_parts.append(f"outs={outs_str}")
+
+    # Additional decorator kwargs
+    for k, v in cell.decorator_kwargs.items():
+        kwargs_parts.append(f'{k}="{v}"')
+
+    decorator_args = ",\n    ".join(kwargs_parts)
+    lines.append(f"@dg.multi_asset(\n    {decorator_args},\n)")
+
+    # Function signature
+    params = ", ".join(cell.inputs)
+    ret_type = f" -> {cell.return_type_annotation}" if cell.return_type_annotation else ""
+    lines.append(f"def {cell.name}({params}){ret_type}:")
+
+    # Docstring
+    if cell.docstring:
+        lines.append(f'    """{cell.docstring}"""')
+
+    # Body statements
+    for stmt in cell.body_stmts:
+        stmt_text = ast.unparse(stmt)
+        for line in stmt_text.splitlines():
+            lines.append(f"    {line}")
+
+    # Return all outputs as tuple
+    lines.append(f"    return {', '.join(cell.outputs)}")
 
     return "\n".join(lines)
 
@@ -203,6 +263,135 @@ def _parse_asset_function(
         return_type_annotation=return_type,
         decorator_kwargs=decorator_kwargs,
     )
+
+
+def _is_dagster_multi_asset(
+    node: ast.FunctionDef, *, multi_asset_names: set[str] | None = None
+) -> bool:
+    """Check if a function is decorated with @dg.multi_asset(...) or @dagster.multi_asset(...).
+
+    Also supports bare name forms (@multi_asset(...)) when the name is in
+    multi_asset_names (tracked from ``from dagster import multi_asset``).
+    """
+    _names = multi_asset_names or set()
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        func = dec.func
+        # @dg.multi_asset(...) / @dagster.multi_asset(...)
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "multi_asset"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in ("dg", "dagster")
+        ):
+            return True
+        # @multi_asset(...) (bare call from `from dagster import multi_asset`)
+        if isinstance(func, ast.Name) and func.id in _names:
+            return True
+    return False
+
+
+def _parse_multi_asset_function(
+    node: ast.FunctionDef,
+    *,
+    resource_types: set[str] | None = None,
+    multi_asset_names: set[str] | None = None,
+) -> CellNode:
+    """Extract a CellNode from a dagster multi_asset function definition."""
+    name = node.name
+    docstring = ast.get_docstring(node)
+
+    _resource_types = resource_types or set()
+
+    # Extract inputs, filtering framework/resource params
+    inputs: list[str] = []
+    stripped_params: set[str] = set()
+    for arg in node.args.args:
+        if _is_framework_param(arg, resource_types=_resource_types):
+            stripped_params.add(arg.arg)
+        else:
+            inputs.append(arg.arg)
+
+    # Extract return type annotation
+    return_type = ast.unparse(node.returns) if node.returns else None
+
+    # Extract outputs from outs={...} in decorator
+    outputs = _extract_multi_asset_outs(node, multi_asset_names=multi_asset_names)
+
+    # Build body: strip docstring and return statement. Unlike single-asset
+    # _transform_body() which converts `return expr` into `name = expr`,
+    # multi_asset bodies already contain separate assignments for each output
+    # so we just strip the return.
+    body_stmts = _strip_body(node, has_docstring=docstring is not None)
+
+    # Strip calls to stripped params
+    if stripped_params:
+        body_stmts = _strip_framework_calls(body_stmts, stripped_params)
+
+    return CellNode(
+        name=name,
+        body_stmts=body_stmts,
+        inputs=inputs,
+        outputs=outputs,
+        cell_type=CellType.CODE,
+        docstring=docstring,
+        return_type_annotation=return_type,
+    )
+
+
+def _extract_multi_asset_outs(
+    node: ast.FunctionDef, *, multi_asset_names: set[str] | None = None
+) -> list[str]:
+    """Extract output names from the outs={...} kwarg of @dg.multi_asset(...)."""
+    _names = multi_asset_names or set()
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        func = dec.func
+        is_multi_asset = False
+        # @dg.multi_asset(...) / @dagster.multi_asset(...)
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "multi_asset"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in ("dg", "dagster")
+        ):
+            is_multi_asset = True
+        # @multi_asset(...) (bare call from `from dagster import multi_asset`)
+        if isinstance(func, ast.Name) and func.id in _names:
+            is_multi_asset = True
+        if not is_multi_asset:
+            continue
+        for kw in dec.keywords:
+            if kw.arg == "outs" and isinstance(kw.value, ast.Dict):
+                names: list[str] = []
+                for key in kw.value.keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        names.append(key.value)
+                return names
+    return []
+
+
+def _strip_body(
+    node: ast.FunctionDef, *, has_docstring: bool
+) -> list[ast.stmt]:
+    """Strip docstring and final return from a function body."""
+    stmts = list(node.body)
+
+    # Strip docstring
+    if has_docstring and stmts:
+        stmts = stmts[1:]
+
+    if not stmts:
+        return stmts
+
+    # Strip final return (don't transform to assignment for multi_asset)
+    last = stmts[-1]
+    if isinstance(last, ast.Return):
+        stmts = stmts[:-1]
+
+    return stmts
 
 
 def _is_framework_param(
