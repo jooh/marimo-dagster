@@ -61,14 +61,35 @@ def _convert_sql_cells(ir: NotebookIR) -> None:
     if not has_unaliased_duckdb:
         ir.imports.append(ImportItem(module="duckdb"))
 
+    # Ensure duckdb and polars are in the script dependencies so the
+    # generated dagster module can actually run duckdb.sql(...).pl().
+    _ensure_dependency(ir, "duckdb")
+    _ensure_dependency(ir, "polars")
+
     for cell in ir.cells:
         if cell.cell_type == CellType.SQL:
             cell.cell_type = CellType.CODE
             cell.body_stmts = [_RewriteMoSql().visit(s) for s in cell.body_stmts]
 
 
+def _ensure_dependency(ir: NotebookIR, package: str) -> None:
+    """Add *package* to script metadata dependencies if not already present."""
+    import re
+
+    for dep in ir.metadata.dependencies:
+        bare = re.split(r"[><=!~\[]", dep)[0].strip()
+        if bare == package:
+            return
+    ir.metadata.dependencies.append(package)
+
+
 class _RewriteMoSql(ast.NodeTransformer):
-    """Rewrite mo.sql(...) calls to duckdb.sql(...), stripping marimo-specific kwargs."""
+    """Rewrite mo.sql(...) calls to duckdb.sql(...).pl().
+
+    mo.sql() returns a Polars DataFrame by default.  Plain duckdb.sql()
+    returns a lazy DuckDBPyRelation, so we append .pl() to materialise
+    the result as a Polars DataFrame and preserve the original semantics.
+    """
 
     _MARIMO_SQL_KWARGS = {"output"}
 
@@ -85,4 +106,11 @@ class _RewriteMoSql(ast.NodeTransformer):
                 kw for kw in node.keywords
                 if kw.arg not in self._MARIMO_SQL_KWARGS
             ]
+            # Wrap in .pl() so the result is a Polars DataFrame,
+            # matching mo.sql()'s default return type.
+            node = ast.Call(
+                func=ast.Attribute(value=node, attr="pl", ctx=ast.Load()),
+                args=[],
+                keywords=[],
+            )
         return node

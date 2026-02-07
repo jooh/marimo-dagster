@@ -284,6 +284,49 @@ class TestSqlCellConversion:
         result = marimo_to_dagster(source)
         assert "import duckdb" in result
 
+    def test_sql_cells_add_duckdb_and_polars_deps(self) -> None:
+        """duckdb and polars should be added to script dependencies for SQL cells."""
+        source = (
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _(mo):\n'
+            '    result = mo.sql(f"SELECT 1")\n'
+            '    return (result,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        assert '"duckdb"' in result
+        assert '"polars"' in result
+
+    def test_sql_cells_no_duplicate_deps(self) -> None:
+        """Existing duckdb/polars deps should not be duplicated."""
+        source = (
+            '# /// script\n'
+            '# dependencies = [\n'
+            '#     "marimo",\n'
+            '#     "duckdb==1.2.2",\n'
+            '#     "polars[pyarrow]==1.27.1",\n'
+            '# ]\n'
+            '# ///\n'
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _(mo):\n'
+            '    result = mo.sql(f"SELECT 1")\n'
+            '    return (result,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        # The deps block should keep originals, not add bare duplicates
+        assert '"duckdb==1.2.2"' in result
+        assert '"polars[pyarrow]==1.27.1"' in result
+        # No bare "duckdb" or "polars" dep lines (the versioned ones suffice)
+        assert '"duckdb",' not in result
+        assert '"polars",' not in result
+
     def test_duckdb_example_converts_sql_cells(self) -> None:
         """duckdb_example.py SQL cells should survive as dagster assets."""
         from pathlib import Path as P
@@ -369,6 +412,22 @@ class TestSqlCellConversion:
         # The rewritten code uses `duckdb.sql(...)` so an unaliased import
         # must be present (not just `import duckdb as db`).
         assert "import duckdb\n" in result
+
+    def test_sql_rewrite_returns_polars_dataframe(self) -> None:
+        """mo.sql() returns a DataFrame; duckdb.sql() must call .pl() to match."""
+        source = (
+            'import marimo\n'
+            'app = marimo.App()\n'
+            '@app.cell\n'
+            'def _(mo):\n'
+            '    result = mo.sql(f"SELECT 1")\n'
+            '    return (result,)\n'
+            'if __name__ == "__main__":\n'
+            '    app.run()\n'
+        )
+        result = marimo_to_dagster(source)
+        assert "duckdb.sql(" in result
+        assert ".pl()" in result
 
     def test_non_mo_sql_calls_not_rewritten(self) -> None:
         """Other function calls in SQL cells should not be rewritten."""
