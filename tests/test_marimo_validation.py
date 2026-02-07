@@ -11,12 +11,11 @@ from pathlib import Path
 
 import pytest
 
+from conftest import EXAMPLES_DIR
 from marimo._ast.load import LoadResult, get_notebook_status
 from marimo_dagster._ir import CellNode, NotebookIR, ScriptMetadata
 from marimo_dagster._marimo_ast import generate_marimo
 from marimo_dagster.converter import dagster_to_marimo
-
-EXAMPLES_DIR = Path(__file__).parent / "examples"
 
 
 def _validate_marimo_source(source: str) -> LoadResult:

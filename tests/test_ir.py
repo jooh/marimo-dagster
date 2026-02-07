@@ -50,6 +50,46 @@ class TestImportItem:
         assert item.names is not None
         assert len(item.names) == 2
 
+    def test_format_statement_plain_import(self) -> None:
+        item = ImportItem(module="os")
+        assert item.format_statement() == "import os"
+
+    def test_format_statement_aliased_import(self) -> None:
+        item = ImportItem(module="polars", alias="pl")
+        assert item.format_statement() == "import polars as pl"
+
+    def test_format_statement_from_import(self) -> None:
+        item = ImportItem(module="pathlib", names=[("Path", None)])
+        assert item.format_statement() == "from pathlib import Path"
+
+    def test_format_statement_from_import_with_alias(self) -> None:
+        item = ImportItem(module="pathlib", names=[("Path", "P")])
+        assert item.format_statement() == "from pathlib import Path as P"
+
+    def test_format_statement_from_import_multiple(self) -> None:
+        item = ImportItem(module="os.path", names=[("join", None), ("exists", None)])
+        assert item.format_statement() == "from os.path import join, exists"
+
+    def test_exported_names_plain_import(self) -> None:
+        item = ImportItem(module="os")
+        assert item.exported_names() == ["os"]
+
+    def test_exported_names_aliased_import(self) -> None:
+        item = ImportItem(module="polars", alias="pl")
+        assert item.exported_names() == ["pl"]
+
+    def test_exported_names_from_import(self) -> None:
+        item = ImportItem(module="pathlib", names=[("Path", None)])
+        assert item.exported_names() == ["Path"]
+
+    def test_exported_names_from_import_with_alias(self) -> None:
+        item = ImportItem(module="pathlib", names=[("Path", "P")])
+        assert item.exported_names() == ["P"]
+
+    def test_exported_names_from_import_multiple(self) -> None:
+        item = ImportItem(module="os.path", names=[("join", None), ("exists", "ex")])
+        assert item.exported_names() == ["join", "ex"]
+
 
 class TestCellNode:
     """Tests for CellNode dataclass."""

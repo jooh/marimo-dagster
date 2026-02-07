@@ -27,6 +27,21 @@ class ImportItem:
     names: list[tuple[str, str | None]] | None = None
     alias: str | None = None
 
+    def format_statement(self) -> str:
+        """Format this import as a Python import statement."""
+        if self.names is not None:
+            parts = [f"{name} as {alias}" if alias else name for name, alias in self.names]
+            return f"from {self.module} import {', '.join(parts)}"
+        if self.alias:
+            return f"import {self.module} as {self.alias}"
+        return f"import {self.module}"
+
+    def exported_names(self) -> list[str]:
+        """Return the names this import makes available in the local scope."""
+        if self.names is not None:
+            return [alias or name for name, alias in self.names]
+        return [self.alias or self.module]
+
 
 @dataclass
 class CellNode:
